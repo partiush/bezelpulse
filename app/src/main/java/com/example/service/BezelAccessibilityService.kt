@@ -105,6 +105,7 @@ class BezelAccessibilityService : AccessibilityService() {
     }
 
     private val systemPowerReceiver = object : BroadcastReceiver() {
+        @Suppress("DEPRECATION")
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
             val cfg = BezelRuntimeBus.config.value

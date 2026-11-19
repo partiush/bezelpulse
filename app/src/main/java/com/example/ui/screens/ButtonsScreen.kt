@@ -308,7 +308,7 @@ fun ButtonsScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "Direct Power presses and long-press Power menus trigger native press and sustained hold animations. If your device blocks short Power key events, you can optionally enable Power Wake / Lock Fallback in the Studio tab.",
+                            text = "Direct Power presses and long-press Power menus trigger press and sustained hold animations. You can also enable Screen Wake & Lock Animation in the Studio tab.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )

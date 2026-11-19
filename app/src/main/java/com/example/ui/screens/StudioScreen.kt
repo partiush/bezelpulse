@@ -366,8 +366,8 @@ private fun AlwaysOnBackgroundCard(
             testTagName = "auto_boot_switch"
         )
         PrecisionToggleRow(
-            title = "Power Wake / Lock Fallback",
-            subtitle = "Optional: also animate when the screen wakes or sleeps (may trigger on tap-to-wake)",
+            title = "Screen Wake & Lock Animation",
+            subtitle = "Also animate the Power bezel when the screen turns on or off",
             checked = config.powerWakePulseEnabled,
             onCheckedChange = onTogglePowerWakePulse,
             testTagName = "power_wake_switch"
