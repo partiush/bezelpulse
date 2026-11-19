@@ -1,0 +1,6 @@
+{
+  "name": "BezelPulse",
+  "description": "Native-feel iOS-style bezel press animations for Android hardware volume and power buttons with real-time spring physics and full customization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

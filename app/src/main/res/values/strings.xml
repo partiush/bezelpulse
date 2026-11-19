@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">BezelPulse</string>
+    <string name="accessibility_service_description">Detects hardware volume and power button clicks with zero latency to render customizable bezel press animations along your screen edge without blocking or altering button behavior.</string>
+    <string name="nav_studio">Studio</string>
+    <string name="nav_buttons">Buttons</string>
+    <string name="nav_style">Style</string>
+    <string name="nav_physics">Physics</string>
+    <string name="service_active">System-Wide Engine Active</string>
+    <string name="service_inactive">Enable System-Wide Overlay</string>
+    <string name="service_active_sub">Zero-latency bezel animations active across all apps</string>
+    <string name="service_inactive_sub">Works inside BezelPulse now. Enable Accessibility to run everywhere.</string>
+    <string name="calibrate_edges">Calibrate on Screen Edge</string>
+    <string name="calibration_done">Save Alignment</string>
+    <string name="calibration_hint">Drag each handle vertically until it lines up with your physical buttons</string>
+    <string name="test_vol_up">Vol +</string>
+    <string name="test_vol_down">Vol −</string>
+    <string name="test_power">Power</string>
+    <string name="save_preset">Save Preset</string>
+    <string name="reset_defaults">Reset Defaults</string>
+</resources>
