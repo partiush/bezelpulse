@@ -7,6 +7,9 @@ on:
       - master
     tags:
       - 'v*'
+  release:
+    types:
+      - published
   pull_request:
     branches:
       - main
@@ -26,6 +29,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: bezelpulse-${{ github.workflow }}-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-release:
@@ -59,10 +66,13 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
           EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.release_tag }}
           RUN_NUM: ${{ github.run_number }}
         run: |
-          if [ "$IS_TAG" = "true" ]; then
+          if [ "$EVENT_NAME" = "release" ] && [ -n "$RELEASE_TAG" ]; then
+            TAG="$RELEASE_TAG"
+          elif [ "$IS_TAG" = "true" ]; then
             TAG="$REF_NAME"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
@@ -83,7 +93,6 @@ jobs:
           MINOR="${MINOR:-0}"
           PATCH="${PATCH:-0}"
 
-          # Numeric check fallback
           if [[ "$MAJOR" =~ ^[0-9]+$ ]] && [[ "$MINOR" =~ ^[0-9]+$ ]] && [[ "$PATCH" =~ ^[0-9]+$ ]]; then
             VER_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
           else
@@ -95,14 +104,13 @@ jobs:
           echo "code=$VER_CODE" >> "$GITHUB_OUTPUT"
           echo "Resolved release: tag=$TAG versionName=$CLEAN_VER versionCode=$VER_CODE"
 
-      - name: Prepare consistent signing keystores
+      - name: Prepare signing keystores
         id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          # Always decode the repository keystore for unit tests & consistent fallback signing
           if [ -f debug.keystore.base64 ]; then
             tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
           elif [ ! -f debug.keystore ]; then
@@ -112,22 +120,20 @@ jobs:
               -dname "CN=BezelPulse,O=BezelPulse,C=US"
           fi
 
-          # Use private release keystore from GitHub Secrets if configured; otherwise import the
-          # repository's deterministic key so every future release updates seamlessly in-place.
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > my-upload-key.jks
             echo "store_password=$STORE_PASSWORD" >> "$GITHUB_OUTPUT"
             echo "key_password=$KEY_PASSWORD" >> "$GITHUB_OUTPUT"
-            echo "Using private release keystore from repository secrets."
+            echo "Using release keystore from repository secrets."
           else
             rm -f my-upload-key.jks
             keytool -importkeystore \
-              -srckeystore debug.keystore -srcstorepass android -srcalias androiddebugkey \
+              -srckeystore debug.keystore -srcstorepass android -srcalias androiddebugkey -srckeypass android \
               -destkeystore my-upload-key.jks -deststorepass android -destalias upload -destkeypass android \
               -noprompt
             echo "store_password=android" >> "$GITHUB_OUTPUT"
             echo "key_password=android" >> "$GITHUB_OUTPUT"
-            echo "Using deterministic repository signing certificate for consistent in-place updates."
+            echo "Using repository signing keystore."
           fi
 
       - name: Run unit & Robolectric tests
@@ -156,12 +162,12 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
+        if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "BezelPulse ${{ steps.version.outputs.tag }}"
-          generate_release_notes: true
+          generate_release_notes: ${{ github.event_name != 'release' }}
           make_latest: true
           files: |
             release-apks/BezelPulse-${{ steps.version.outputs.tag }}.apk
