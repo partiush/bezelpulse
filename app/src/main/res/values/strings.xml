@@ -1,20 +1,22 @@
 <resources>
     <string name="app_name">BezelPulse</string>
-    <string name="accessibility_service_description">Detects hardware volume and power button clicks with zero latency to render customizable bezel press animations along your screen edge without blocking or altering button behavior.</string>
+    <string name="accessibility_service_description">Listens for hardware volume, power, and custom key presses to draw customizable bezel animations along the screen edge without blocking or altering normal button behavior.</string>
     <string name="nav_studio">Studio</string>
     <string name="nav_buttons">Buttons</string>
     <string name="nav_style">Style</string>
     <string name="nav_physics">Physics</string>
     <string name="service_active">System-Wide Engine Active</string>
     <string name="service_inactive">Enable System-Wide Overlay</string>
-    <string name="service_active_sub">Zero-latency bezel animations active across all apps</string>
-    <string name="service_inactive_sub">Works inside BezelPulse now. Enable Accessibility to run everywhere.</string>
+    <string name="service_active_sub">Hardware bezel animations are active across all apps</string>
+    <string name="service_inactive_sub">Live preview works in-app. Enable Accessibility to run system-wide.</string>
     <string name="calibrate_edges">Calibrate on Screen Edge</string>
-    <string name="calibration_done">Save Alignment</string>
-    <string name="calibration_hint">Drag each handle vertically until it lines up with your physical buttons</string>
-    <string name="test_vol_up">Vol +</string>
-    <string name="test_vol_down">Vol −</string>
-    <string name="test_power">Power</string>
+    <string name="calibration_done">Done</string>
+    <string name="calibration_hint">Drag any edge handle to line up with your physical buttons</string>
+    <string name="add_new_button">Add Button</string>
     <string name="save_preset">Save Preset</string>
     <string name="reset_defaults">Reset Defaults</string>
+    <string name="notif_channel_name">Background Engine</string>
+    <string name="notif_channel_desc">Keeps hardware button animations active in the background after clearing recent apps</string>
+    <string name="notif_title">BezelPulse Active</string>
+    <string name="notif_text">Hardware bezel animations running · Tap to configure</string>
 </resources>

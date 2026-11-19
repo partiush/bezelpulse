@@ -2,6 +2,8 @@ package com.example.viewmodel
 
 import android.app.Application
 import android.content.ComponentName
+import android.content.Context
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,11 +13,13 @@ import com.example.model.BezelConfig
 import com.example.model.BezelSide
 import com.example.model.BezelStyle
 import com.example.model.BuiltInStylePreset
+import com.example.model.ButtonConfig
 import com.example.model.ButtonEventRecord
+import com.example.model.ButtonIds
 import com.example.model.CustomPreset
 import com.example.model.DeviceHardwareLayout
-import com.example.model.HardwareButtonType
 import com.example.service.BezelAccessibilityService
+import com.example.service.BezelKeepAliveService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,14 +39,20 @@ enum class StudioTab(val label: String) {
 data class BezelUiState(
     val config: BezelConfig = BezelConfig(),
     val selectedTab: StudioTab = StudioTab.STUDIO,
-    val selectedButton: HardwareButtonType = HardwareButtonType.VOLUME_UP,
+    val selectedButtonId: String = ButtonIds.VOLUME_UP,
     val isServiceEnabled: Boolean = false,
+    val isKeepAliveRunning: Boolean = false,
+    val isBatteryUnrestricted: Boolean = false,
     val isCalibrationMode: Boolean = false,
     val customPresets: List<CustomPreset> = emptyList(),
     val lastEvent: ButtonEventRecord? = null,
     val showSavePresetDialog: Boolean = false,
+    val showAddButtonDialog: Boolean = false,
     val activePresetName: String? = null
-)
+) {
+    val selectedButton: ButtonConfig
+        get() = config.buttonById(selectedButtonId) ?: config.buttons.first()
+}
 
 class BezelViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -57,7 +67,15 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.configFlow.collect { saved ->
                 BezelRuntimeBus.updateConfig(saved)
-                _uiState.update { it.copy(config = saved) }
+                _uiState.update { state ->
+                    val validSelectedId = if (saved.buttonById(state.selectedButtonId) != null) {
+                        state.selectedButtonId
+                    } else {
+                        saved.buttons.firstOrNull()?.id ?: ButtonIds.VOLUME_UP
+                    }
+                    state.copy(config = saved, selectedButtonId = validSelectedId)
+                }
+                syncKeepAliveService(saved)
             }
         }
         viewModelScope.launch {
@@ -67,7 +85,12 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             BezelRuntimeBus.serviceConnected.collect { connected ->
-                refreshServiceStatus(connectedOverride = connected)
+                refreshSystemStatus(connectedOverride = connected)
+            }
+        }
+        viewModelScope.launch {
+            BezelRuntimeBus.keepAliveRunning.collect { running ->
+                _uiState.update { it.copy(isKeepAliveRunning = running) }
             }
         }
         viewModelScope.launch {
@@ -75,13 +98,60 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(lastEvent = event) }
             }
         }
-        refreshServiceStatus()
+        refreshSystemStatus()
     }
 
-    fun refreshServiceStatus(connectedOverride: Boolean? = null) {
+    fun refreshSystemStatus(connectedOverride: Boolean? = null) {
         val enabledInSettings = isAccessibilityServiceEnabledInSettings()
         val isActive = (connectedOverride ?: BezelRuntimeBus.serviceConnected.value) || enabledInSettings
-        _uiState.update { it.copy(isServiceEnabled = isActive) }
+        val batteryUnrestricted = checkBatteryUnrestricted()
+        _uiState.update {
+            it.copy(
+                isServiceEnabled = isActive,
+                isKeepAliveRunning = BezelRuntimeBus.keepAliveRunning.value,
+                isBatteryUnrestricted = batteryUnrestricted
+            )
+        }
+        syncKeepAliveService(_uiState.value.config)
+    }
+
+    private fun syncKeepAliveService(config: BezelConfig) {
+        val app = getApplication<Application>()
+        if (config.masterEnabled && config.keepAliveForeground) {
+            BezelKeepAliveService.start(app)
+        } else {
+            BezelKeepAliveService.stop(app)
+        }
+    }
+
+    private fun checkBatteryUnrestricted(): Boolean {
+        return com.example.util.OemSupport.isIgnoringBatteryOptimizations(getApplication())
+    }
+
+    fun exportConfigJson(): String {
+        return com.example.data.BezelConfigCodec.exportConfigJson(_uiState.value.config)
+    }
+
+    fun importConfigJson(rawJson: String): Result<Unit> {
+        val result = com.example.data.BezelConfigCodec.importConfigJson(rawJson, _uiState.value.config)
+        return result.map { imported ->
+            BezelRuntimeBus.updateConfig(imported)
+            _uiState.update { state ->
+                val validSelected = if (imported.buttonById(state.selectedButtonId) != null) {
+                    state.selectedButtonId
+                } else {
+                    imported.buttons.firstOrNull()?.id ?: ButtonIds.VOLUME_UP
+                }
+                state.copy(
+                    config = imported,
+                    selectedButtonId = validSelected,
+                    activePresetName = "Imported"
+                )
+            }
+            syncKeepAliveService(imported)
+            schedulePersist(imported)
+            triggerCascadeDemo()
+        }
     }
 
     private fun isAccessibilityServiceEnabledInSettings(): Boolean {
@@ -102,8 +172,8 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(selectedTab = tab) }
     }
 
-    fun selectButtonForEdit(type: HardwareButtonType) {
-        _uiState.update { it.copy(selectedButton = type) }
+    fun selectButtonForEdit(buttonId: String) {
+        _uiState.update { it.copy(selectedButtonId = buttonId) }
     }
 
     fun setCalibrationMode(enabled: Boolean) {
@@ -112,6 +182,10 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setShowSavePresetDialog(show: Boolean) {
         _uiState.update { it.copy(showSavePresetDialog = show) }
+    }
+
+    fun setShowAddButtonDialog(show: Boolean) {
+        _uiState.update { it.copy(showAddButtonDialog = show) }
     }
 
     fun updateConfig(clearActivePreset: Boolean = true, transform: (BezelConfig) -> BezelConfig) {
@@ -123,43 +197,95 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
                 activePresetName = if (clearActivePreset) null else it.activePresetName
             )
         }
+        syncKeepAliveService(updated)
         schedulePersist(updated)
     }
 
-    fun updateButtonPosition(type: HardwareButtonType, fraction: Float) {
-        val clamped = fraction.coerceIn(0.06f, 0.94f)
+    fun addCustomButton(
+        name: String,
+        keyCode: Int,
+        glyph: String,
+        side: BezelSide,
+        accentColorArgb: Int
+    ) {
+        val cleanName = name.trim().ifEmpty { "Custom Key" }
+        val shortLabel = cleanName.take(7)
+        val newId = "custom_${UUID.randomUUID().toString().take(8)}"
+
+        // Find a clean non-overlapping initial vertical position on the chosen side
+        val existingOnSide = _uiState.value.config.buttons.filter { it.side == side }
+        val defaultPos = when {
+            existingOnSide.isEmpty() -> 0.32f
+            else -> ((existingOnSide.maxOf { it.verticalPositionFraction } + 0.12f)
+                .takeIf { it <= 0.84f } ?: 0.22f)
+        }
+
+        val newButton = ButtonConfig(
+            id = newId,
+            name = cleanName,
+            shortLabel = shortLabel,
+            glyph = glyph,
+            keyCode = keyCode,
+            isBuiltIn = false,
+            accentColorArgb = accentColorArgb,
+            enabled = true,
+            side = side,
+            verticalPositionFraction = defaultPos,
+            lengthDp = 58f
+        )
+
+        updateConfig(clearActivePreset = false) { it.addButton(newButton) }
+        _uiState.update {
+            it.copy(
+                selectedButtonId = newId,
+                showAddButtonDialog = false
+            )
+        }
+        triggerButtonPulse(newId, "New Button")
+    }
+
+    fun deleteCustomButton(buttonId: String) {
+        val updated = _uiState.value.config.removeButton(buttonId)
+        BezelRuntimeBus.updateConfig(updated)
+        _uiState.update { state ->
+            val nextSelected = if (state.selectedButtonId == buttonId) {
+                updated.buttons.firstOrNull()?.id ?: ButtonIds.VOLUME_UP
+            } else {
+                state.selectedButtonId
+            }
+            state.copy(config = updated, selectedButtonId = nextSelected)
+        }
+        schedulePersist(updated)
+    }
+
+    fun updateButtonPosition(buttonId: String, fraction: Float) {
+        val clamped = fraction.coerceIn(0.05f, 0.95f)
         updateConfig(clearActivePreset = false) { cfg ->
-            cfg.updateButton(type) { it.copy(verticalPositionFraction = clamped) }
+            cfg.updateButton(buttonId) { it.copy(verticalPositionFraction = clamped) }
         }
     }
 
-    fun updateButtonSide(type: HardwareButtonType, side: BezelSide) {
+    fun updateButtonSide(buttonId: String, side: BezelSide) {
         updateConfig(clearActivePreset = false) { cfg ->
-            cfg.updateButton(type) { it.copy(side = side) }
+            cfg.updateButton(buttonId) { it.copy(side = side) }
         }
-        triggerButtonPulse(type, "Preview")
+        triggerButtonPulse(buttonId, "Preview")
     }
 
-    fun updateButtonLength(type: HardwareButtonType, lengthDp: Float) {
+    fun updateButtonLength(buttonId: String, lengthDp: Float) {
         updateConfig(clearActivePreset = false) { cfg ->
-            cfg.updateButton(type) { it.copy(lengthDp = lengthDp.coerceIn(36f, 140f)) }
+            cfg.updateButton(buttonId) { it.copy(lengthDp = lengthDp.coerceIn(36f, 140f)) }
         }
     }
 
-    fun updateButtonEnabled(type: HardwareButtonType, enabled: Boolean) {
+    fun updateButtonEnabled(buttonId: String, enabled: Boolean) {
         updateConfig(clearActivePreset = false) { cfg ->
-            cfg.updateButton(type) { it.copy(enabled = enabled) }
+            cfg.updateButton(buttonId) { it.copy(enabled = enabled) }
         }
     }
 
     fun applyDeviceLayout(layout: DeviceHardwareLayout) {
-        updateConfig(clearActivePreset = false) { cfg ->
-            cfg.copy(
-                volumeUp = layout.volumeUp,
-                volumeDown = layout.volumeDown,
-                power = layout.power
-            )
-        }
+        updateConfig(clearActivePreset = false) { cfg -> layout.applyTo(cfg) }
         triggerCascadeDemo()
     }
 
@@ -226,19 +352,26 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
     fun resetToDefaults() {
         val defaults = BezelConfig()
         BezelRuntimeBus.updateConfig(defaults)
-        _uiState.update { it.copy(config = defaults, activePresetName = "Default") }
+        _uiState.update {
+            it.copy(
+                config = defaults,
+                selectedButtonId = ButtonIds.VOLUME_UP,
+                activePresetName = "Default"
+            )
+        }
+        syncKeepAliveService(defaults)
         schedulePersist(defaults)
         triggerCascadeDemo()
     }
 
     fun setStyle(style: BezelStyle) {
         updateConfig { it.copy(style = style) }
-        triggerButtonPulse(_uiState.value.selectedButton, "Style Preview")
+        triggerButtonPulse(_uiState.value.selectedButtonId, "Style Preview")
     }
 
-    fun onSimulatedPress(type: HardwareButtonType, isDown: Boolean) {
+    fun onSimulatedPress(buttonId: String, isDown: Boolean) {
         BezelRuntimeBus.dispatchButtonEvent(
-            type = type,
+            buttonId = buttonId,
             isDown = isDown,
             sourceLabel = "Studio Pad"
         )
@@ -247,9 +380,9 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun triggerButtonPulse(type: HardwareButtonType, source: String = "Preview") {
+    fun triggerButtonPulse(buttonId: String, source: String = "Preview") {
         BezelRuntimeBus.dispatchButtonEvent(
-            type = type,
+            buttonId = buttonId,
             isDown = true,
             sourceLabel = source,
             isPulseOnly = true
@@ -259,10 +392,10 @@ class BezelViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerCascadeDemo() {
         viewModelScope.launch {
-            val enabledButtons = _uiState.value.config.allButtons().filter { it.enabled }
+            val enabledButtons = _uiState.value.config.buttons.filter { it.enabled }
             for (btn in enabledButtons) {
                 BezelRuntimeBus.dispatchButtonEvent(
-                    type = btn.type,
+                    buttonId = btn.id,
                     isDown = true,
                     sourceLabel = "Preset Demo",
                     isPulseOnly = true

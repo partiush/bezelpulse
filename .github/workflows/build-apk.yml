@@ -14,12 +14,12 @@ on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: 'Also publish APK as a GitHub Release (direct .apk download without unzipping)'
+        description: 'Publish APK as a GitHub Release (direct .apk download)'
         required: false
         default: false
         type: boolean
       release_tag:
-        description: 'Release tag name (used only if Create Release is checked, e.g. v1.0.0)'
+        description: 'Release tag name (e.g. v1.0.0; defaults to v1.0.<run_number>)'
         required: false
         default: ''
         type: string
@@ -28,12 +28,12 @@ permissions:
   contents: write
 
 jobs:
-  build-apk:
-    name: Build Installable Android APK
+  build:
+    name: Test & Build APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up JDK 21
@@ -48,7 +48,7 @@ jobs:
             yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           fi
 
-      - name: Set up Gradle 9.3.1
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
@@ -64,31 +64,31 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+        run: gradle :app:assembleDebug --no-daemon
 
-      - name: Prepare Debug APK for download
-        run: |
-          mkdir -p release-apks
-          cp app/build/outputs/apk/debug/app-debug.apk release-apks/BezelPulse-debug.apk
-          ls -lh release-apks/
-
-      - name: Build Release APK (optional when signing secrets exist)
+      - name: Collect APKs
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/debug/app-debug.apk release-apks/BezelPulse-debug.apk
+
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > my-upload-key.jks
-            gradle :app:assembleRelease --no-daemon --stacktrace
+            gradle :app:assembleRelease --no-daemon
             cp app/build/outputs/apk/release/app-release.apk release-apks/BezelPulse-release.apk
             rm -f my-upload-key.jks
-          else
-            echo "Release signing secrets not configured; skipping release APK (debug APK is ready to install)."
           fi
 
-      - name: Upload BezelPulse APK artifact
+          ls -lh release-apks/
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: BezelPulse-APK
@@ -120,22 +120,5 @@ jobs:
         with:
           tag_name: ${{ steps.release_meta.outputs.tag }}
           name: "BezelPulse ${{ steps.release_meta.outputs.tag }}"
-          body: |
-            ### BezelPulse Android Build
-            Download `BezelPulse-debug.apk` (or `BezelPulse-release.apk` if signing secrets are configured) directly onto your Android device to install.
+          generate_release_notes: true
           files: release-apks/*.apk
-
-      - name: Write download summary
-        run: |
-          {
-            echo "## BezelPulse APK Ready"
-            echo ""
-            echo "Your installable APK has been built and uploaded as the **BezelPulse-APK** artifact below."
-            echo ""
-            echo "### How to install on Android"
-            echo "1. Scroll down to **Artifacts** on this workflow run and download **BezelPulse-APK**."
-            echo "2. Unzip the downloaded archive and tap \`BezelPulse-debug.apk\` on your Android phone."
-            echo "3. Allow installing unknown apps if prompted, open **BezelPulse**, and enable the Accessibility Service for system-wide animations."
-            echo ""
-            echo "> **Tip:** To get a direct \`.apk\` download link without unzipping, run this workflow manually with **Also publish APK as a GitHub Release** checked, or push a version tag like \`v1.0.0\`."
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -26,9 +26,9 @@ fun InAppBezelOverlay(
     val overlayView = remember(context) { BezelOverlayView(context) }
 
     DisposableEffect(overlayView) {
-        val listener = BezelRuntimeBus.ButtonListener { type, isDown, isPulseOnly ->
+        val listener = BezelRuntimeBus.ButtonListener { buttonId, isDown, isPulseOnly, holdOverrideMs ->
             overlayView.post {
-                overlayView.onButtonEvent(type, isDown, isPulseOnly)
+                overlayView.onButtonEvent(buttonId, isDown, isPulseOnly, holdOverrideMs)
             }
         }
         BezelRuntimeBus.registerListener(listener)

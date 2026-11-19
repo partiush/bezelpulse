@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BookmarkAdd
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material3.AlertDialog
@@ -35,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -63,17 +70,20 @@ fun PhysicsScreen(
     onOpenSavePresetDialog: () -> Unit,
     onDismissSavePresetDialog: () -> Unit,
     onConfirmSavePreset: (String) -> Unit,
+    onExportConfigJson: () -> String,
+    onImportConfigJson: (String) -> Result<Unit>,
     onResetDefaults: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val cfg = uiState.config
+    val context = LocalContext.current
+    var showImportDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Live Spring Oscilloscope Graph
         item {
             SpringCurveGraph(
                 stiffness = cfg.stiffness,
@@ -81,20 +91,19 @@ fun PhysicsScreen(
             )
         }
 
-        // 2. Spring Dynamics Parameters
         item {
             StudioSectionCard(
-                title = "Spring Physics Engine",
-                subtitle = "Sub-stepped harmonic oscillator running directly on display VSYNC"
+                title = "Spring Physics",
+                subtitle = "Damped harmonic oscillator stepped on display VSYNC"
             ) {
                 PrecisionSliderRow(
-                    label = "Spring Stiffness (k)",
+                    label = "Stiffness (k)",
                     valueText = "${cfg.stiffness.roundToInt()} N/m",
                     value = cfg.stiffness,
                     valueRange = 180f..1800f,
                     onValueChange = { v -> onUpdateConfig { it.copy(stiffness = v) } },
                     onValueChangeFinished = onPreviewPulse,
-                    hint = "Higher values snap faster into the bezel with crisp urgency",
+                    hint = "Higher stiffness gives a faster, snappier onset",
                     testTagName = "stiffness_slider"
                 )
                 Spacer(Modifier.height(6.dp))
@@ -105,7 +114,7 @@ fun PhysicsScreen(
                     valueRange = 0.35f..1.10f,
                     onValueChange = { v -> onUpdateConfig { it.copy(dampingRatio = v) } },
                     onValueChangeFinished = onPreviewPulse,
-                    hint = "0.95 = zero-bounce iOS native · 0.50 = elastic bouncy spring",
+                    hint = "0.95 = critically damped (no bounce) · 0.50 = elastic bounce",
                     testTagName = "damping_slider"
                 )
                 Spacer(Modifier.height(6.dp))
@@ -116,18 +125,18 @@ fun PhysicsScreen(
                     valueRange = 1.0f..1.60f,
                     onValueChange = { v -> onUpdateConfig { it.copy(holdBoostMultiplier = v) } },
                     onValueChangeFinished = onPreviewPulse,
-                    hint = "Extra bulge swell when holding a volume key continuously",
+                    hint = "Extra bulge swell while holding a button down",
                     testTagName = "hold_boost_slider"
                 )
                 Spacer(Modifier.height(6.dp))
                 PrecisionSliderRow(
-                    label = "Quick-Tap Minimum Hold",
+                    label = "Minimum Tap Hold",
                     valueText = "${cfg.minPressHoldMs} ms",
                     value = cfg.minPressHoldMs.toFloat(),
                     valueRange = 50f..250f,
                     onValueChange = { v -> onUpdateConfig { it.copy(minPressHoldMs = v.roundToInt().toLong()) } },
                     onValueChangeFinished = onPreviewPulse,
-                    hint = "Ensures ultra-rapid clicks still render a full fluid pulse",
+                    hint = "Keeps very quick clicks visible through a full smooth pulse",
                     testTagName = "min_hold_slider"
                 )
 
@@ -150,7 +159,7 @@ fun PhysicsScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "Feel Spring Cascade on Bezel",
+                        text = "Preview Spring Cascade",
                         style = MaterialTheme.typography.labelLarge,
                         color = TitaniumCyan
                     )
@@ -158,15 +167,14 @@ fun PhysicsScreen(
             }
         }
 
-        // 3. Synchronized Tactile Haptics
         item {
             StudioSectionCard(
-                title = "Synchronized Haptics",
-                subtitle = "Pairs physical button press with a crisp micro-tick impulse"
+                title = "Tactile Haptics",
+                subtitle = "Optional short vibration pulse synchronized with key press"
             ) {
                 PrecisionToggleRow(
                     title = "Enable Tactile Tick",
-                    subtitle = "Fires a sharp sub-12ms haptic pulse synced with the spring launch",
+                    subtitle = "Triggers a crisp haptic pulse on press onset",
                     checked = cfg.hapticFeedbackEnabled,
                     onCheckedChange = { enabled ->
                         onUpdateConfig { it.copy(hapticFeedbackEnabled = enabled) }
@@ -178,7 +186,7 @@ fun PhysicsScreen(
                 AnimatedVisibility(visible = cfg.hapticFeedbackEnabled) {
                     Column(modifier = Modifier.padding(top = 8.dp)) {
                         PrecisionSliderRow(
-                            label = "Haptic Impulse Strength",
+                            label = "Haptic Strength",
                             valueText = "${(cfg.hapticStrength * 100).roundToInt()}%",
                             value = cfg.hapticStrength,
                             valueRange = 0.2f..1.0f,
@@ -191,7 +199,69 @@ fun PhysicsScreen(
             }
         }
 
-        // 4. Save Custom Preset / Reset Actions
+        item {
+            StudioSectionCard(
+                title = "Backup & Share Config",
+                subtitle = "Copy or import a full JSON profile including style, physics, and buttons"
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val json = onExportConfigJson()
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("BezelPulse Config", json))
+                            Toast.makeText(context, "Config JSON copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("export_config_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, HairlineBorder)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = null,
+                            tint = TextPrimary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Copy JSON",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TextPrimary
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { showImportDialog = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("import_config_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, TitaniumCyan.copy(alpha = 0.6f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.FileUpload,
+                            contentDescription = null,
+                            tint = TitaniumCyan,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Import JSON",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TitaniumCyan
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -255,6 +325,88 @@ fun PhysicsScreen(
             onSave = onConfirmSavePreset
         )
     }
+
+    if (showImportDialog) {
+        ImportConfigDialog(
+            onDismiss = { showImportDialog = false },
+            onImport = { raw ->
+                val result = onImportConfigJson(raw)
+                if (result.isSuccess) {
+                    showImportDialog = false
+                    Toast.makeText(context, "Configuration imported", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Invalid JSON config", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ImportConfigDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit
+) {
+    var jsonInput by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = ObsidianElevated,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+        shape = RoundedCornerShape(24.dp),
+        title = {
+            Text(
+                text = "Import JSON Config",
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Paste a BezelPulse JSON profile exported from another device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = jsonInput,
+                    onValueChange = { jsonInput = it },
+                    placeholder = { Text("{ \"style\": \"LIQUID_BULGE\", ... }") },
+                    minLines = 4,
+                    maxLines = 7,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("import_json_input"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = TitaniumCyan,
+                        unfocusedBorderColor = HairlineBorder,
+                        cursorColor = TitaniumCyan,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onImport(jsonInput) },
+                modifier = Modifier.testTag("confirm_import_json_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TitaniumCyan,
+                    contentColor = ObsidianVoid
+                )
+            ) {
+                Text("Import")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        }
+    )
 }
 
 @Composable

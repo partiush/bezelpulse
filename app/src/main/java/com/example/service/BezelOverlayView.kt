@@ -13,18 +13,16 @@ import com.example.engine.BezelRuntimeBus
 import com.example.engine.BezelSpringController
 import com.example.model.BezelSide
 import com.example.model.BezelStyle
-import com.example.model.HardwareButtonType
 
 /**
  * Hardware-accelerated, zero-allocation overlay view driven directly by Display VSYNC
- * via Choreographer. Draws natively across all apps at 60/90/120Hz with 0% idle CPU.
+ * via Choreographer. Renders all configured built-in and custom buttons at 60/90/120Hz with 0% idle CPU.
  */
 class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCallback {
 
     private val springController = BezelSpringController()
     private val density = context.resources.displayMetrics.density
 
-    // Pre-allocated drawing objects (zero allocations in onDraw for zero-jank 120fps)
     private val fillPath = Path()
     private val rimPath = Path()
 
@@ -59,14 +57,20 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
         isFocusable = false
     }
 
-    fun onButtonEvent(type: HardwareButtonType, isDown: Boolean, isPulseOnly: Boolean = false) {
+    fun onButtonEvent(
+        buttonId: String,
+        isDown: Boolean,
+        isPulseOnly: Boolean = false,
+        holdOverrideMs: Long? = null
+    ) {
         val config = BezelRuntimeBus.config.value
-        if (!config.masterEnabled || !config.buttonConfig(type).enabled) return
+        val button = config.buttonById(buttonId) ?: return
+        if (!config.masterEnabled || !button.enabled) return
 
         if (isPulseOnly) {
-            springController.triggerPulse(type)
+            springController.triggerPulse(buttonId, holdOverrideMs)
         } else {
-            springController.onButtonEvent(type, isDown, config)
+            springController.onButtonEvent(buttonId, isDown, config)
         }
         startFrameLoopIfNeeded()
     }
@@ -114,9 +118,9 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
         val config = BezelRuntimeBus.config.value
         if (!config.masterEnabled) return
 
-        for (btn in config.allButtons()) {
+        for (btn in config.buttons) {
             if (!btn.enabled) continue
-            val state = springController.stateFor(btn.type)
+            val state = springController.stateFor(btn.id)
             val displacement = state.displacement
             if (displacement <= 0.003f) continue
 
@@ -140,14 +144,12 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
 
             val visibilityAlpha = (displacement * 2.2f).coerceIn(0f, 1f)
 
-            // 1. Fill body (skipped or lightly tinted in pure EDGE_GLOW mode if fill opacity is low)
             val fillAlpha = (config.fillOpacity * visibilityAlpha * 255f).toInt().coerceIn(0, 255)
             if (fillAlpha > 0) {
                 fillPaint.color = withAlpha(config.fillColorArgb, fillAlpha)
                 canvas.drawPath(fillPath, fillPaint)
             }
 
-            // 2. GPU-native multi-pass soft luminous halo + crisp edge rim
             if (config.rimHighlightEnabled || config.style == BezelStyle.EDGE_GLOW) {
                 val baseRimAlpha = config.rimOpacity * visibilityAlpha
                 if (config.rimGlowRadiusDp > 0.5f && baseRimAlpha > 0.02f) {
@@ -170,7 +172,6 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
                 canvas.drawPath(rimPath, rimPaint)
             }
 
-            // 3. Optional subtle micro-glyph inside deep press
             if (config.showMicroGlyph && displacement > 0.25f && depthPx >= 10f * density) {
                 val glyphAlpha = (((displacement - 0.25f) / 0.65f).coerceIn(0f, 1f) * 235f).toInt()
                 val gx = BezelGeometry.glyphCenterX(config.style, btn.side, edgeX, depthPx)
@@ -180,7 +181,7 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
                     glyphAlpha
                 )
                 val baseline = centerY - (glyphPaint.descent() + glyphPaint.ascent()) * 0.5f
-                canvas.drawText(btn.type.glyph, gx, baseline, glyphPaint)
+                canvas.drawText(btn.glyph, gx, baseline, glyphPaint)
             }
         }
     }

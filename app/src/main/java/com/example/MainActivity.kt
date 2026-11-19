@@ -1,15 +1,18 @@
 package com.example
 
-import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
+import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -46,15 +49,18 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.engine.BezelRuntimeBus
-import com.example.model.HardwareButtonType
+import com.example.ui.components.AddButtonDialog
 import com.example.ui.components.EdgeCalibrationOverlay
 import com.example.ui.components.InAppBezelOverlay
 import com.example.ui.screens.ButtonsScreen
@@ -67,6 +73,7 @@ import com.example.ui.theme.ObsidianVoid
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TitaniumCyan
 import com.example.ui.theme.TitaniumCyanContainer
+import com.example.viewmodel.BezelUiState
 import com.example.viewmodel.BezelViewModel
 import com.example.viewmodel.StudioTab
 
@@ -85,7 +92,9 @@ class MainActivity : ComponentActivity() {
             BezelPulseTheme {
                 BezelPulseApp(
                     viewModel = viewModel,
-                    onOpenAccessibilitySettings = { openAccessibilitySettings() }
+                    onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                    onOpenBatterySettings = { openBatteryOptimizationSettings() },
+                    onOpenAutoStartSettings = { openAutoStartSettings() }
                 )
             }
         }
@@ -93,64 +102,95 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.refreshServiceStatus()
+        viewModel.refreshSystemStatus()
     }
 
     /**
-     * Zero-latency in-app hardware button listener:
-     * Even before the user enables the system-wide AccessibilityService, pressing physical
-     * Volume Up / Volume Down / Power buttons inside BezelPulse immediately triggers the
-     * live spring animation along the real screen edge without blocking normal OS behavior.
+     * Zero-latency in-app hardware key listener + Live Physical Key Capture for AddButtonDialog.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val captureListener = BezelRuntimeBus.onKeyCaptureListener
+        if (captureListener != null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+                event.keyCode != KeyEvent.KEYCODE_BACK
+            ) {
+                captureListener.invoke(event.keyCode)
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_UP && event.keyCode != KeyEvent.KEYCODE_BACK) {
+                return true
+            }
+        }
+
         if (!BezelRuntimeBus.serviceConnected.value) {
-            val buttonType = when (event.keyCode) {
-                KeyEvent.KEYCODE_VOLUME_UP -> HardwareButtonType.VOLUME_UP
-                KeyEvent.KEYCODE_VOLUME_DOWN -> HardwareButtonType.VOLUME_DOWN
-                KeyEvent.KEYCODE_POWER -> HardwareButtonType.POWER
-                else -> null
+            val isDown = when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount > 0) return super.dispatchKeyEvent(event)
+                    true
+                }
+                KeyEvent.ACTION_UP -> false
+                else -> return super.dispatchKeyEvent(event)
             }
 
-            if (buttonType != null) {
-                when (event.action) {
-                    KeyEvent.ACTION_DOWN -> {
-                        if (event.repeatCount == 0) {
-                            BezelRuntimeBus.dispatchButtonEvent(
-                                type = buttonType,
-                                isDown = true,
-                                sourceLabel = "Physical Key"
-                            )
-                            BezelRuntimeBus.triggerHaptic(applicationContext, isPress = true)
-                        }
-                    }
-                    KeyEvent.ACTION_UP -> {
-                        BezelRuntimeBus.dispatchButtonEvent(
-                            type = buttonType,
-                            isDown = false,
-                            sourceLabel = "Physical Key"
-                        )
-                    }
-                }
+            val matched = BezelRuntimeBus.dispatchKeyCode(
+                keyCode = event.keyCode,
+                isDown = isDown,
+                sourceLabel = "Physical Key"
+            )
+            if (matched && isDown) {
+                BezelRuntimeBus.triggerHaptic(applicationContext, isPress = true)
             }
         }
         return super.dispatchKeyEvent(event)
     }
 
     private fun openAccessibilitySettings() {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        runCatching { startActivity(intent) }
+        com.example.util.OemSupport.openAccessibilitySettings(this)
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        com.example.util.OemSupport.openBatterySettings(this)
+    }
+
+    private fun openAutoStartSettings() {
+        com.example.util.OemSupport.openAutoStartSettings(this)
     }
 }
 
 @Composable
 private fun BezelPulseApp(
     viewModel: BezelViewModel,
-    onOpenAccessibilitySettings: () -> Unit
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenAutoStartSettings: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val systemServiceConnected by BezelRuntimeBus.serviceConnected.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { viewModel.refreshSystemStatus() }
+    )
+
+    val requestNotificationPermissionIfNeeded: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    // Proactively request notification permission once on Android 13+ so the silent Keep-Alive service displays cleanly
+    LaunchedEffect(Unit) {
+        if (uiState.config.keepAliveForeground) {
+            requestNotificationPermissionIfNeeded()
+        }
+    }
 
     if (uiState.selectedTab != StudioTab.STUDIO && !uiState.isCalibrationMode) {
         BackHandler { viewModel.selectTab(StudioTab.STUDIO) }
@@ -213,6 +253,9 @@ private fun BezelPulseApp(
                             uiState = uiState,
                             viewModel = viewModel,
                             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                            onOpenBatterySettings = onOpenBatterySettings,
+                            onOpenAutoStartSettings = onOpenAutoStartSettings,
+                            onRequestNotificationPermission = requestNotificationPermissionIfNeeded,
                             modifier = Modifier.widthIn(max = 680.dp)
                         )
                     }
@@ -261,13 +304,16 @@ private fun BezelPulseApp(
                         uiState = uiState,
                         viewModel = viewModel,
                         onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                        onOpenBatterySettings = onOpenBatterySettings,
+                        onOpenAutoStartSettings = onOpenAutoStartSettings,
+                        onRequestNotificationPermission = requestNotificationPermissionIfNeeded,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
             }
         }
 
-        // Interactive Full-Screen Edge Calibration HUD
+        // Interactive Full-Screen Edge Calibration HUD (zero-jitter fixed coordinate tracking)
         AnimatedVisibility(
             visible = uiState.isCalibrationMode,
             enter = fadeIn(),
@@ -275,14 +321,25 @@ private fun BezelPulseApp(
         ) {
             EdgeCalibrationOverlay(
                 config = uiState.config,
-                onPositionChange = { type, pos -> viewModel.updateButtonPosition(type, pos) },
-                onSideFlip = { type, side -> viewModel.updateButtonSide(type, side) },
-                onTriggerPulse = { type -> viewModel.triggerButtonPulse(type, "Calibration") },
+                onPositionChange = { id, pos -> viewModel.updateButtonPosition(id, pos) },
+                onSideFlip = { id, side -> viewModel.updateButtonSide(id, side) },
+                onLengthChange = { id, len -> viewModel.updateButtonLength(id, len) },
+                onTriggerPulse = { id -> viewModel.triggerButtonPulse(id, "Calibration") },
                 onDone = { viewModel.setCalibrationMode(false) }
             )
         }
 
-        // Full-bleed edge-to-edge live bezel animation overlay (auto-yields when system Accessibility overlay is active)
+        // Add Custom Hardware Button Dialog
+        if (uiState.showAddButtonDialog) {
+            AddButtonDialog(
+                onDismiss = { viewModel.setShowAddButtonDialog(false) },
+                onConfirm = { name, keyCode, glyph, side, accent ->
+                    viewModel.addCustomButton(name, keyCode, glyph, side, accent)
+                }
+            )
+        }
+
+        // Full-bleed edge-to-edge live bezel animation overlay
         InAppBezelOverlay(
             isSystemServiceRunning = systemServiceConnected,
             modifier = Modifier.fillMaxSize()
@@ -292,9 +349,12 @@ private fun BezelPulseApp(
 
 @Composable
 private fun StudioTabContent(
-    uiState: com.example.viewmodel.BezelUiState,
+    uiState: BezelUiState,
     viewModel: BezelViewModel,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenAutoStartSettings: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     when (uiState.selectedTab) {
@@ -304,9 +364,14 @@ private fun StudioTabContent(
                 viewModel.updateConfig(clearActivePreset = false) { it.copy(masterEnabled = enabled) }
                 if (enabled) viewModel.triggerCascadeDemo()
             },
+            onUpdateConfig = { transform -> viewModel.updateConfig(clearActivePreset = false, transform = transform) },
             onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            onOpenBatterySettings = onOpenBatterySettings,
+            onOpenAutoStartSettings = onOpenAutoStartSettings,
+            onRequestNotificationPermission = onRequestNotificationPermission,
             onOpenCalibration = { viewModel.setCalibrationMode(true) },
-            onSimulatedPress = { type, down -> viewModel.onSimulatedPress(type, down) },
+            onOpenAddButton = { viewModel.setShowAddButtonDialog(true) },
+            onSimulatedPress = { id, down -> viewModel.onSimulatedPress(id, down) },
             onApplyBuiltInPreset = { viewModel.applyBuiltInPreset(it) },
             onApplyCustomPreset = { viewModel.applyCustomPreset(it) },
             onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
@@ -316,14 +381,16 @@ private fun StudioTabContent(
         StudioTab.BUTTONS -> ButtonsScreen(
             uiState = uiState,
             onSelectButton = { viewModel.selectButtonForEdit(it) },
+            onOpenAddButton = { viewModel.setShowAddButtonDialog(true) },
+            onDeleteCustomButton = { viewModel.deleteCustomButton(it) },
             onApplyDeviceLayout = { viewModel.applyDeviceLayout(it) },
             onOpenCalibration = { viewModel.setCalibrationMode(true) },
-            onToggleEnabled = { type, enabled -> viewModel.updateButtonEnabled(type, enabled) },
-            onSelectSide = { type, side -> viewModel.updateButtonSide(type, side) },
-            onPositionChange = { type, pos -> viewModel.updateButtonPosition(type, pos) },
-            onLengthChange = { type, len -> viewModel.updateButtonLength(type, len) },
+            onToggleEnabled = { id, enabled -> viewModel.updateButtonEnabled(id, enabled) },
+            onSelectSide = { id, side -> viewModel.updateButtonSide(id, side) },
+            onPositionChange = { id, pos -> viewModel.updateButtonPosition(id, pos) },
+            onLengthChange = { id, len -> viewModel.updateButtonLength(id, len) },
             onTriggerPulse = { viewModel.triggerButtonPulse(it) },
-            onSimulatedPress = { type, down -> viewModel.onSimulatedPress(type, down) },
+            onSimulatedPress = { id, down -> viewModel.onSimulatedPress(id, down) },
             modifier = modifier
         )
 
@@ -331,18 +398,20 @@ private fun StudioTabContent(
             uiState = uiState,
             onSelectStyle = { viewModel.setStyle(it) },
             onUpdateConfig = { transform -> viewModel.updateConfig(transform = transform) },
-            onPreviewPulse = { viewModel.triggerButtonPulse(uiState.selectedButton, "Style Preview") },
+            onPreviewPulse = { viewModel.triggerButtonPulse(uiState.selectedButtonId, "Style Preview") },
             modifier = modifier
         )
 
         StudioTab.PHYSICS -> PhysicsScreen(
             uiState = uiState,
             onUpdateConfig = { transform -> viewModel.updateConfig(transform = transform) },
-            onPreviewPulse = { viewModel.triggerButtonPulse(uiState.selectedButton, "Physics Preview") },
+            onPreviewPulse = { viewModel.triggerButtonPulse(uiState.selectedButtonId, "Physics Preview") },
             onTriggerCascade = { viewModel.triggerCascadeDemo() },
             onOpenSavePresetDialog = { viewModel.setShowSavePresetDialog(true) },
             onDismissSavePresetDialog = { viewModel.setShowSavePresetDialog(false) },
             onConfirmSavePreset = { name -> viewModel.saveCurrentAsCustomPreset(name) },
+            onExportConfigJson = { viewModel.exportConfigJson() },
+            onImportConfigJson = { raw -> viewModel.importConfigJson(raw) },
             onResetDefaults = { viewModel.resetToDefaults() },
             modifier = modifier
         )

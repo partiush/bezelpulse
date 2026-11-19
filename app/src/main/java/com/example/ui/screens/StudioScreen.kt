@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.view.KeyEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -24,13 +25,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SettingsAccessibility
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Straighten
+import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -47,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -54,10 +61,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.model.BezelConfig
 import com.example.model.BezelPresetsCatalog
 import com.example.model.BuiltInStylePreset
+import com.example.model.ButtonConfig
 import com.example.model.CustomPreset
-import com.example.model.HardwareButtonType
+import com.example.ui.components.PrecisionToggleRow
 import com.example.ui.components.StudioSectionCard
 import com.example.ui.components.TactileHoldButton
 import com.example.ui.theme.EmeraldActive
@@ -80,9 +89,14 @@ import com.example.viewmodel.BezelUiState
 fun StudioScreen(
     uiState: BezelUiState,
     onMasterToggle: (Boolean) -> Unit,
+    onUpdateConfig: ((BezelConfig) -> BezelConfig) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenAutoStartSettings: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     onOpenCalibration: () -> Unit,
-    onSimulatedPress: (HardwareButtonType, Boolean) -> Unit,
+    onOpenAddButton: () -> Unit,
+    onSimulatedPress: (String, Boolean) -> Unit,
     onApplyBuiltInPreset: (BuiltInStylePreset) -> Unit,
     onApplyCustomPreset: (CustomPreset) -> Unit,
     onDeleteCustomPreset: (String) -> Unit,
@@ -98,9 +112,10 @@ fun StudioScreen(
             HeroBezelCard(
                 masterEnabled = uiState.config.masterEnabled,
                 isServiceEnabled = uiState.isServiceEnabled,
+                isKeepAliveRunning = uiState.isKeepAliveRunning,
                 styleLabel = uiState.config.style.label,
                 lastEventText = uiState.lastEvent?.let {
-                    "${it.button.shortLabel} · ${it.sourceLabel}"
+                    "${it.buttonLabel} · ${it.sourceLabel}"
                 },
                 onMasterToggle = onMasterToggle
             )
@@ -115,45 +130,99 @@ fun StudioScreen(
             )
         }
 
-        // 3. Interactive Hardware Test Pad (supports true press & hold!)
+        // 3. Background Reliability & System Behavior
+        item {
+            AlwaysOnBackgroundCard(
+                config = uiState.config,
+                isKeepAliveRunning = uiState.isKeepAliveRunning,
+                isBatteryUnrestricted = uiState.isBatteryUnrestricted,
+                onToggleKeepAlive = { enabled ->
+                    if (enabled) onRequestNotificationPermission()
+                    onUpdateConfig { it.copy(keepAliveForeground = enabled) }
+                },
+                onToggleAutoBoot = { enabled ->
+                    onUpdateConfig { it.copy(autoStartOnBoot = enabled) }
+                },
+                onTogglePowerWakePulse = { enabled ->
+                    onUpdateConfig { it.copy(powerWakePulseEnabled = enabled) }
+                },
+                onTogglePauseLandscape = { enabled ->
+                    onUpdateConfig { it.copy(pauseInLandscape = enabled) }
+                },
+                onOpenBatterySettings = onOpenBatterySettings,
+                onOpenAutoStartSettings = onOpenAutoStartSettings
+            )
+        }
+
+        // 4. Interactive Hardware Test Pad (supports all built-in + custom added buttons!)
         item {
             StudioSectionCard(
                 title = "Live Edge Test Pad",
-                subtitle = "Tap or press-and-hold below, or click your real physical volume keys right now"
+                subtitle = "Tap or press-and-hold any button, or click your physical keys right now",
+                trailing = {
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onOpenAddButton)
+                            .testTag("studio_add_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        color = TitaniumCyanContainer,
+                        border = BorderStroke(1.dp, TitaniumCyan.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "Add new button",
+                                tint = TitaniumCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "Add",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = TitaniumCyan
+                            )
+                        }
+                    }
+                }
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    TactileHoldButton(
-                        label = stringResource(R.string.test_vol_up),
-                        icon = Icons.AutoMirrored.Rounded.VolumeUp,
-                        accentColor = TitaniumCyan,
-                        onPressChange = { down -> onSimulatedPress(HardwareButtonType.VOLUME_UP, down) },
-                        testTagName = "test_vol_up_button",
-                        modifier = Modifier.weight(1f)
-                    )
-                    TactileHoldButton(
-                        label = stringResource(R.string.test_vol_down),
-                        icon = Icons.AutoMirrored.Rounded.VolumeDown,
-                        accentColor = EmeraldActive,
-                        onPressChange = { down -> onSimulatedPress(HardwareButtonType.VOLUME_DOWN, down) },
-                        testTagName = "test_vol_down_button",
-                        modifier = Modifier.weight(1f)
-                    )
-                    TactileHoldButton(
-                        label = stringResource(R.string.test_power),
-                        icon = Icons.Rounded.PowerSettingsNew,
-                        accentColor = SignalAmber,
-                        onPressChange = { down -> onSimulatedPress(HardwareButtonType.POWER, down) },
-                        testTagName = "test_power_button",
-                        modifier = Modifier.weight(1f)
-                    )
+                if (uiState.config.buttons.size <= 3) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        uiState.config.buttons.forEach { btn ->
+                            TactileHoldButton(
+                                label = btn.shortLabel,
+                                icon = iconForButton(btn),
+                                accentColor = Color(btn.accentColorArgb),
+                                onPressChange = { down -> onSimulatedPress(btn.id, down) },
+                                testTagName = "test_pad_${btn.id}",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(uiState.config.buttons, key = { it.id }) { btn ->
+                            TactileHoldButton(
+                                label = btn.shortLabel,
+                                icon = iconForButton(btn),
+                                accentColor = Color(btn.accentColorArgb),
+                                onPressChange = { down -> onSimulatedPress(btn.id, down) },
+                                testTagName = "test_pad_${btn.id}",
+                                modifier = Modifier.width(104.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // 4. Signature Style Presets Carousel
+        // 5. Signature Style Presets Carousel
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -193,7 +262,7 @@ fun StudioScreen(
             }
         }
 
-        // 5. User Custom Presets (if any saved)
+        // 6. User Custom Presets
         if (uiState.customPresets.isNotEmpty()) {
             item {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -224,9 +293,161 @@ fun StudioScreen(
 }
 
 @Composable
+private fun AlwaysOnBackgroundCard(
+    config: BezelConfig,
+    isKeepAliveRunning: Boolean,
+    isBatteryUnrestricted: Boolean,
+    onToggleKeepAlive: (Boolean) -> Unit,
+    onToggleAutoBoot: (Boolean) -> Unit,
+    onTogglePowerWakePulse: (Boolean) -> Unit,
+    onTogglePauseLandscape: (Boolean) -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenAutoStartSettings: () -> Unit
+) {
+    val deviceHint = androidx.compose.runtime.remember {
+        com.example.util.OemSupport.backgroundHintForDevice()
+    }
+    val hasOemAutoStart = androidx.compose.runtime.remember {
+        com.example.util.OemSupport.hasDedicatedAutoStartScreen()
+    }
+
+    StudioSectionCard(
+        title = "Background Reliability",
+        subtitle = "Keep animations active after clearing recents and across reboots",
+        trailing = {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (isKeepAliveRunning) EmeraldContainer else SignalAmberContainer
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = if (isKeepAliveRunning) EmeraldActive else SignalAmber,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = if (isKeepAliveRunning) "PINNED" else "STANDBY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isKeepAliveRunning) EmeraldActive else SignalAmber
+                    )
+                }
+            }
+        }
+    ) {
+        PrecisionToggleRow(
+            title = "Stay Active After Clearing Recents",
+            subtitle = "Runs a silent foreground service so Android does not unload the overlay",
+            checked = config.keepAliveForeground,
+            onCheckedChange = onToggleKeepAlive,
+            testTagName = "keep_alive_switch"
+        )
+        PrecisionToggleRow(
+            title = "Auto-Start After Reboot",
+            subtitle = "Restores the background engine automatically when the device boots",
+            checked = config.autoStartOnBoot,
+            onCheckedChange = onToggleAutoBoot,
+            testTagName = "auto_boot_switch"
+        )
+        PrecisionToggleRow(
+            title = "Power Wake & Menu Pulse",
+            subtitle = "Animates the Power bezel on screen wake, lock, and long-press power menus",
+            checked = config.powerWakePulseEnabled,
+            onCheckedChange = onTogglePowerWakePulse,
+            testTagName = "power_wake_switch"
+        )
+        PrecisionToggleRow(
+            title = "Pause in Landscape",
+            subtitle = "Automatically pauses side-bezel animations during fullscreen videos and games",
+            checked = config.pauseInLandscape,
+            onCheckedChange = onTogglePauseLandscape,
+            testTagName = "pause_landscape_switch"
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onOpenBatterySettings,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("battery_unrestrict_button"),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isBatteryUnrestricted) EmeraldActive.copy(alpha = 0.6f) else SignalAmber.copy(alpha = 0.65f)
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.BatteryChargingFull,
+                    contentDescription = null,
+                    tint = if (isBatteryUnrestricted) EmeraldActive else SignalAmber,
+                    modifier = Modifier.size(17.dp)
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = if (isBatteryUnrestricted) "Battery OK" else "Unrestrict Battery",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (isBatteryUnrestricted) EmeraldActive else SignalAmber,
+                    maxLines = 1
+                )
+            }
+
+            OutlinedButton(
+                onClick = onOpenAutoStartSettings,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("oem_autostart_button"),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, TitaniumCyan.copy(alpha = 0.65f))
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.RestartAlt,
+                    contentDescription = null,
+                    tint = TitaniumCyan,
+                    modifier = Modifier.size(17.dp)
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = if (hasOemAutoStart) "Auto-Start" else "App Settings",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TitaniumCyan,
+                    maxLines = 1
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            text = deviceHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted
+        )
+    }
+}
+
+private fun iconForButton(btn: ButtonConfig): ImageVector = when (btn.keyCode) {
+    KeyEvent.KEYCODE_VOLUME_UP -> Icons.AutoMirrored.Rounded.VolumeUp
+    KeyEvent.KEYCODE_VOLUME_DOWN -> Icons.AutoMirrored.Rounded.VolumeDown
+    KeyEvent.KEYCODE_POWER -> Icons.Rounded.PowerSettingsNew
+    else -> Icons.Rounded.TouchApp
+}
+
+@Composable
 private fun HeroBezelCard(
     masterEnabled: Boolean,
     isServiceEnabled: Boolean,
+    isKeepAliveRunning: Boolean,
     styleLabel: String,
     lastEventText: String?,
     onMasterToggle: (Boolean) -> Unit
@@ -295,6 +516,7 @@ private fun HeroBezelCard(
                             Text(
                                 text = when {
                                     !masterEnabled -> "PAUSED"
+                                    isServiceEnabled && isKeepAliveRunning -> "ALWAYS-ON · 120HZ"
                                     isServiceEnabled -> "SYSTEM-WIDE · 120HZ"
                                     else -> "IN-APP PREVIEW READY"
                                 },

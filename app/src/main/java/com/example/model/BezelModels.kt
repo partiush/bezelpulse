@@ -1,9 +1,11 @@
 package com.example.model
 
-enum class HardwareButtonType(val label: String, val shortLabel: String, val glyph: String) {
-    VOLUME_UP("Volume Up", "Vol +", "+"),
-    VOLUME_DOWN("Volume Down", "Vol −", "−"),
-    POWER("Power / Side", "Power", "⏻")
+import android.view.KeyEvent
+
+object ButtonIds {
+    const val VOLUME_UP = "volume_up"
+    const val VOLUME_DOWN = "volume_down"
+    const val POWER = "power"
 }
 
 enum class BezelSide(val label: String) {
@@ -18,16 +20,100 @@ enum class BezelStyle(val label: String, val subtitle: String) {
     MAGNETIC_WAVE("Ripple Wave", "Broad fluid bezel wave")
 }
 
+data class HardwareKeyPreset(
+    val label: String,
+    val shortLabel: String,
+    val keyCode: Int,
+    val defaultGlyph: String
+)
+
+object HardwareKeyCatalog {
+    val presets = listOf(
+        HardwareKeyPreset("Camera Shutter", "Cam", KeyEvent.KEYCODE_CAMERA, "◎"),
+        HardwareKeyPreset("AI / Assist Key", "AI", KeyEvent.KEYCODE_ASSIST, "✦"),
+        HardwareKeyPreset("Voice Assist", "Voice", KeyEvent.KEYCODE_VOICE_ASSIST, "◉"),
+        HardwareKeyPreset("Camera Focus", "Focus", KeyEvent.KEYCODE_FOCUS, "○"),
+        HardwareKeyPreset("Action / Mute", "Mute", KeyEvent.KEYCODE_VOLUME_MUTE, "⚡"),
+        HardwareKeyPreset("Headset / Media", "Media", KeyEvent.KEYCODE_HEADSETHOOK, "♪"),
+        HardwareKeyPreset("Trigger L1", "L1", KeyEvent.KEYCODE_BUTTON_L1, "L"),
+        HardwareKeyPreset("Trigger R1", "R1", KeyEvent.KEYCODE_BUTTON_R1, "R"),
+        HardwareKeyPreset("Power / Side", "Power", KeyEvent.KEYCODE_POWER, "⏻"),
+        HardwareKeyPreset("Volume Up", "Vol +", KeyEvent.KEYCODE_VOLUME_UP, "+"),
+        HardwareKeyPreset("Volume Down", "Vol −", KeyEvent.KEYCODE_VOLUME_DOWN, "−")
+    )
+
+    val customGlyphs = listOf("⚡", "◎", "✦", "★", "♪", "●", "▲", "▼", "L", "R", "+", "−", "⏻")
+
+    fun keyCodeDisplayName(keyCode: Int): String {
+        val raw = KeyEvent.keyCodeToString(keyCode)
+        return raw.removePrefix("KEYCODE_").replace('_', ' ')
+            .lowercase()
+            .replaceFirstChar { it.uppercase() }
+    }
+}
+
 data class ButtonConfig(
-    val type: HardwareButtonType,
+    val id: String,
+    val name: String,
+    val shortLabel: String,
+    val glyph: String,
+    val keyCode: Int,
+    val isBuiltIn: Boolean = false,
+    val accentColorArgb: Int = 0xFF38BDF8.toInt(),
     val enabled: Boolean = true,
     val side: BezelSide = BezelSide.RIGHT,
-    val verticalPositionFraction: Float = 0.30f,
-    val lengthDp: Float = 66f
+    val verticalPositionFraction: Float = 0.35f,
+    val lengthDp: Float = 62f
+)
+
+fun defaultBuiltInButtons(): List<ButtonConfig> = listOf(
+    ButtonConfig(
+        id = ButtonIds.VOLUME_UP,
+        name = "Volume Up",
+        shortLabel = "Vol +",
+        glyph = "+",
+        keyCode = KeyEvent.KEYCODE_VOLUME_UP,
+        isBuiltIn = true,
+        accentColorArgb = 0xFF38BDF8.toInt(),
+        enabled = true,
+        side = BezelSide.RIGHT,
+        verticalPositionFraction = 0.34f,
+        lengthDp = 62f
+    ),
+    ButtonConfig(
+        id = ButtonIds.VOLUME_DOWN,
+        name = "Volume Down",
+        shortLabel = "Vol −",
+        glyph = "−",
+        keyCode = KeyEvent.KEYCODE_VOLUME_DOWN,
+        isBuiltIn = true,
+        accentColorArgb = 0xFF10B981.toInt(),
+        enabled = true,
+        side = BezelSide.RIGHT,
+        verticalPositionFraction = 0.44f,
+        lengthDp = 62f
+    ),
+    ButtonConfig(
+        id = ButtonIds.POWER,
+        name = "Power / Side",
+        shortLabel = "Power",
+        glyph = "⏻",
+        keyCode = KeyEvent.KEYCODE_POWER,
+        isBuiltIn = true,
+        accentColorArgb = 0xFFF59E0B.toInt(),
+        enabled = true,
+        side = BezelSide.RIGHT,
+        verticalPositionFraction = 0.56f,
+        lengthDp = 58f
+    )
 )
 
 data class BezelConfig(
     val masterEnabled: Boolean = true,
+    val keepAliveForeground: Boolean = true,
+    val autoStartOnBoot: Boolean = true,
+    val powerWakePulseEnabled: Boolean = true,
+    val pauseInLandscape: Boolean = true,
     val style: BezelStyle = BezelStyle.LIQUID_BULGE,
     val maxDepthDp: Float = 16f,
     val shoulderSpread: Float = 0.58f,
@@ -46,52 +132,62 @@ data class BezelConfig(
     val minPressHoldMs: Long = 115L,
     val hapticFeedbackEnabled: Boolean = true,
     val hapticStrength: Float = 0.72f,
-    val volumeUp: ButtonConfig = ButtonConfig(
-        type = HardwareButtonType.VOLUME_UP,
-        enabled = true,
-        side = BezelSide.RIGHT,
-        verticalPositionFraction = 0.36f,
-        lengthDp = 62f
-    ),
-    val volumeDown: ButtonConfig = ButtonConfig(
-        type = HardwareButtonType.VOLUME_DOWN,
-        enabled = true,
-        side = BezelSide.RIGHT,
-        verticalPositionFraction = 0.46f,
-        lengthDp = 62f
-    ),
-    val power: ButtonConfig = ButtonConfig(
-        type = HardwareButtonType.POWER,
-        enabled = true,
-        side = BezelSide.RIGHT,
-        verticalPositionFraction = 0.25f,
-        lengthDp = 58f
-    )
+    val buttons: List<ButtonConfig> = defaultBuiltInButtons()
 ) {
-    fun buttonConfig(type: HardwareButtonType): ButtonConfig = when (type) {
-        HardwareButtonType.VOLUME_UP -> volumeUp
-        HardwareButtonType.VOLUME_DOWN -> volumeDown
-        HardwareButtonType.POWER -> power
-    }
+    fun buttonById(id: String): ButtonConfig? = buttons.firstOrNull { it.id == id }
 
-    fun updateButton(type: HardwareButtonType, transform: (ButtonConfig) -> ButtonConfig): BezelConfig =
-        when (type) {
-            HardwareButtonType.VOLUME_UP -> copy(volumeUp = transform(volumeUp))
-            HardwareButtonType.VOLUME_DOWN -> copy(volumeDown = transform(volumeDown))
-            HardwareButtonType.POWER -> copy(power = transform(power))
-        }
+    fun buttonsForKeyCode(keyCode: Int): List<ButtonConfig> =
+        buttons.filter { it.enabled && it.keyCode == keyCode }
 
-    fun allButtons(): List<ButtonConfig> = listOf(volumeUp, volumeDown, power)
+    fun updateButton(id: String, transform: (ButtonConfig) -> ButtonConfig): BezelConfig =
+        copy(buttons = buttons.map { if (it.id == id) transform(it) else it })
+
+    fun addButton(button: ButtonConfig): BezelConfig =
+        copy(buttons = buttons + button)
+
+    fun removeButton(id: String): BezelConfig =
+        copy(buttons = buttons.filterNot { it.id == id && !it.isBuiltIn })
 }
 
 data class DeviceHardwareLayout(
     val id: String,
     val name: String,
     val subtitle: String,
-    val volumeUp: ButtonConfig,
-    val volumeDown: ButtonConfig,
-    val power: ButtonConfig
-)
+    val volUpSide: BezelSide,
+    val volUpPos: Float,
+    val volUpLen: Float,
+    val volDownSide: BezelSide,
+    val volDownPos: Float,
+    val volDownLen: Float,
+    val powerSide: BezelSide,
+    val powerPos: Float,
+    val powerLen: Float
+) {
+    fun applyTo(config: BezelConfig): BezelConfig {
+        return config.copy(
+            buttons = config.buttons.map { btn ->
+                when (btn.id) {
+                    ButtonIds.VOLUME_UP -> btn.copy(
+                        side = volUpSide,
+                        verticalPositionFraction = volUpPos,
+                        lengthDp = volUpLen
+                    )
+                    ButtonIds.VOLUME_DOWN -> btn.copy(
+                        side = volDownSide,
+                        verticalPositionFraction = volDownPos,
+                        lengthDp = volDownLen
+                    )
+                    ButtonIds.POWER -> btn.copy(
+                        side = powerSide,
+                        verticalPositionFraction = powerPos,
+                        lengthDp = powerLen
+                    )
+                    else -> btn
+                }
+            }
+        )
+    }
+}
 
 data class BuiltInStylePreset(
     val id: String,
@@ -143,7 +239,8 @@ data class CustomPreset(
 }
 
 data class ButtonEventRecord(
-    val button: HardwareButtonType,
+    val buttonId: String,
+    val buttonLabel: String,
     val isDown: Boolean,
     val timestampMs: Long,
     val sourceLabel: String
@@ -155,33 +252,41 @@ object BezelPresetsCatalog {
             id = "pixel",
             name = "Google Pixel",
             subtitle = "Power top-right, Volume below",
-            power = ButtonConfig(HardwareButtonType.POWER, true, BezelSide.RIGHT, 0.25f, 56f),
-            volumeUp = ButtonConfig(HardwareButtonType.VOLUME_UP, true, BezelSide.RIGHT, 0.36f, 60f),
-            volumeDown = ButtonConfig(HardwareButtonType.VOLUME_DOWN, true, BezelSide.RIGHT, 0.46f, 60f)
+            powerSide = BezelSide.RIGHT, powerPos = 0.25f, powerLen = 56f,
+            volUpSide = BezelSide.RIGHT, volUpPos = 0.36f, volUpLen = 60f,
+            volDownSide = BezelSide.RIGHT, volDownPos = 0.46f, volDownLen = 60f
         ),
         DeviceHardwareLayout(
             id = "samsung",
             name = "Samsung Galaxy",
             subtitle = "Volume top-right, Power below",
-            volumeUp = ButtonConfig(HardwareButtonType.VOLUME_UP, true, BezelSide.RIGHT, 0.23f, 64f),
-            volumeDown = ButtonConfig(HardwareButtonType.VOLUME_DOWN, true, BezelSide.RIGHT, 0.33f, 64f),
-            power = ButtonConfig(HardwareButtonType.POWER, true, BezelSide.RIGHT, 0.45f, 56f)
+            volUpSide = BezelSide.RIGHT, volUpPos = 0.23f, volUpLen = 64f,
+            volDownSide = BezelSide.RIGHT, volDownPos = 0.33f, volDownLen = 64f,
+            powerSide = BezelSide.RIGHT, powerPos = 0.45f, powerLen = 56f
         ),
         DeviceHardwareLayout(
-            id = "iphone",
-            name = "iPhone Layout",
-            subtitle = "Volume on left, Side on right",
-            volumeUp = ButtonConfig(HardwareButtonType.VOLUME_UP, true, BezelSide.LEFT, 0.27f, 62f),
-            volumeDown = ButtonConfig(HardwareButtonType.VOLUME_DOWN, true, BezelSide.LEFT, 0.37f, 62f),
-            power = ButtonConfig(HardwareButtonType.POWER, true, BezelSide.RIGHT, 0.31f, 76f)
+            id = "xiaomi",
+            name = "Xiaomi / Redmi",
+            subtitle = "Volume top-right, Power mid-right",
+            volUpSide = BezelSide.RIGHT, volUpPos = 0.28f, volUpLen = 62f,
+            volDownSide = BezelSide.RIGHT, volDownPos = 0.38f, volDownLen = 62f,
+            powerSide = BezelSide.RIGHT, powerPos = 0.50f, powerLen = 58f
         ),
         DeviceHardwareLayout(
             id = "oneplus",
             name = "OnePlus / Nothing",
             subtitle = "Volume left, Power right mid",
-            volumeUp = ButtonConfig(HardwareButtonType.VOLUME_UP, true, BezelSide.LEFT, 0.29f, 62f),
-            volumeDown = ButtonConfig(HardwareButtonType.VOLUME_DOWN, true, BezelSide.LEFT, 0.39f, 62f),
-            power = ButtonConfig(HardwareButtonType.POWER, true, BezelSide.RIGHT, 0.36f, 60f)
+            volUpSide = BezelSide.LEFT, volUpPos = 0.29f, volUpLen = 62f,
+            volDownSide = BezelSide.LEFT, volDownPos = 0.39f, volDownLen = 62f,
+            powerSide = BezelSide.RIGHT, powerPos = 0.36f, powerLen = 60f
+        ),
+        DeviceHardwareLayout(
+            id = "iphone",
+            name = "iPhone Layout",
+            subtitle = "Volume on left, Side on right",
+            volUpSide = BezelSide.LEFT, volUpPos = 0.27f, volUpLen = 62f,
+            volDownSide = BezelSide.LEFT, volDownPos = 0.37f, volDownLen = 62f,
+            powerSide = BezelSide.RIGHT, powerPos = 0.31f, powerLen = 76f
         )
     )
 
