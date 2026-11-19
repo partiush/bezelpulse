@@ -60,6 +60,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.R
 import com.example.model.BezelConfig
 import com.example.model.BezelPresetsCatalog
@@ -288,7 +289,21 @@ fun StudioScreen(
             }
         }
 
-        item { Spacer(Modifier.height(12.dp)) }
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "BezelPulse v${BuildConfig.VERSION_NAME} · Offline & Open Source",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+        }
     }
 }
 
@@ -351,8 +366,8 @@ private fun AlwaysOnBackgroundCard(
             testTagName = "auto_boot_switch"
         )
         PrecisionToggleRow(
-            title = "Power Wake & Menu Pulse",
-            subtitle = "Animates the Power bezel on screen wake, unlock, lock, and long-press menus",
+            title = "Power Wake / Lock Fallback",
+            subtitle = "Optional: also animate when the screen wakes or sleeps (may trigger on tap-to-wake)",
             checked = config.powerWakePulseEnabled,
             onCheckedChange = onTogglePowerWakePulse,
             testTagName = "power_wake_switch"

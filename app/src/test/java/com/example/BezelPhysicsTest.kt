@@ -115,4 +115,55 @@ class BezelPhysicsTest {
             peakDisplacement > 0.80f
         )
     }
+
+    @Test
+    fun stuckKeyAutoReleasesAfterTimeoutUnlessRefreshed() {
+        val config = BezelConfig(stiffness = 800f, dampingRatio = 0.92f)
+        val spring = ButtonSpringState(ButtonIds.POWER)
+
+        var nowMs = 1000L
+        spring.onPress(nowMs)
+
+        // Heartbeat keeps a genuine long hold active past 6 seconds
+        repeat(8) {
+            nowMs += 1000L
+            spring.refreshHold(nowMs)
+            spring.step(0.016f, config, nowMs)
+        }
+        assertTrue("Active hold with heartbeat must stay pressed", spring.isPhysicallyPressed)
+
+        // Dropping ACTION_UP for > MAX_STUCK_HOLD_MS safely auto-releases
+        nowMs += ButtonSpringState.MAX_STUCK_HOLD_MS + 100L
+        spring.step(0.016f, config, nowMs)
+        assertFalse("Dropped ACTION_UP must auto-release safely", spring.isPhysicallyPressed)
+    }
+
+    @Test
+    fun rapidClicksStayWithinSafeDisplacementBounds() {
+        val config = BezelConfig(stiffness = 720f, dampingRatio = 0.45f, holdBoostMultiplier = 1.25f)
+        val spring = ButtonSpringState(ButtonIds.VOLUME_UP)
+        val expectedCap = maxOf(1.85f, config.holdBoostMultiplier + 0.35f)
+
+        var nowMs = 2000L
+        var maxSeen = 0f
+        repeat(25) {
+            spring.triggerPulse(nowMs, holdDurationOverrideMs = 90L)
+            repeat(3) {
+                nowMs += 16L
+                spring.step(0.016f, config, nowMs)
+                if (spring.displacement > maxSeen) maxSeen = spring.displacement
+            }
+        }
+
+        assertTrue(
+            "Rapid clicks should stay clamped <= $expectedCap (seen=$maxSeen)",
+            maxSeen <= expectedCap + 0.001f
+        )
+    }
+
+    @Test
+    fun powerWakeFallbackDefaultsToFalseToPreventTapToWakeFalsePositives() {
+        val defaults = BezelConfig()
+        assertFalse("Power wake fallback should default to off", defaults.powerWakePulseEnabled)
+    }
 }

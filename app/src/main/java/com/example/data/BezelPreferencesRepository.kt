@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -15,13 +16,16 @@ import com.example.model.BezelStyle
 import com.example.model.CustomPreset
 import com.example.model.defaultBuiltInButtons
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 private val Context.bezelDataStore: DataStore<Preferences> by preferencesDataStore(name = "bezel_pulse_prefs")
 
 class BezelPreferencesRepository(private val context: Context) {
 
     private object Keys {
+        val SCHEMA_VERSION = intPreferencesKey("schema_version")
         val MASTER_ENABLED = booleanPreferencesKey("master_enabled")
         val KEEP_ALIVE_FGS = booleanPreferencesKey("keep_alive_fgs")
         val AUTO_START_BOOT = booleanPreferencesKey("auto_start_boot")
@@ -49,7 +53,11 @@ class BezelPreferencesRepository(private val context: Context) {
         val CUSTOM_PRESETS_JSON = stringPreferencesKey("custom_presets_json")
     }
 
-    val configFlow: Flow<BezelConfig> = context.bezelDataStore.data.map { prefs ->
+    private val safePrefsFlow: Flow<Preferences> = context.bezelDataStore.data.catch { error ->
+        if (error is IOException) emit(emptyPreferences()) else throw error
+    }
+
+    val configFlow: Flow<BezelConfig> = safePrefsFlow.map { prefs ->
         val defaults = BezelConfig()
         val parsedButtons = prefs[Keys.BUTTONS_JSON]?.let { BezelConfigCodec.decodeButtons(it) }
             ?.takeIf { it.isNotEmpty() }
@@ -83,13 +91,14 @@ class BezelPreferencesRepository(private val context: Context) {
         )
     }
 
-    val customPresetsFlow: Flow<List<CustomPreset>> = context.bezelDataStore.data.map { prefs ->
+    val customPresetsFlow: Flow<List<CustomPreset>> = safePrefsFlow.map { prefs ->
         val raw = prefs[Keys.CUSTOM_PRESETS_JSON] ?: return@map emptyList()
         BezelConfigCodec.decodePresets(raw)
     }
 
     suspend fun saveConfig(config: BezelConfig) {
         context.bezelDataStore.edit { prefs ->
+            prefs[Keys.SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
             prefs[Keys.MASTER_ENABLED] = config.masterEnabled
             prefs[Keys.KEEP_ALIVE_FGS] = config.keepAliveForeground
             prefs[Keys.AUTO_START_BOOT] = config.autoStartOnBoot
@@ -119,7 +128,12 @@ class BezelPreferencesRepository(private val context: Context) {
 
     suspend fun saveCustomPresets(presets: List<CustomPreset>) {
         context.bezelDataStore.edit { prefs ->
+            prefs[Keys.SCHEMA_VERSION] = CURRENT_SCHEMA_VERSION
             prefs[Keys.CUSTOM_PRESETS_JSON] = BezelConfigCodec.encodePresets(presets)
         }
+    }
+
+    companion object {
+        const val CURRENT_SCHEMA_VERSION = 1
     }
 }

@@ -21,7 +21,7 @@ import com.example.model.BezelStyle
 class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCallback {
 
     private val springController = BezelSpringController()
-    private val density = context.resources.displayMetrics.density
+    private var density = context.resources.displayMetrics.density
 
     private val fillPath = Path()
     private val rimPath = Path()
@@ -57,6 +57,17 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
         isFocusable = false
     }
 
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        density = resources.displayMetrics.density
+    }
+
+    override fun onDetachedFromWindow() {
+        stopAnimationLoop()
+        springController.releaseAll()
+        super.onDetachedFromWindow()
+    }
+
     fun onButtonEvent(
         buttonId: String,
         isDown: Boolean,
@@ -75,16 +86,22 @@ class BezelOverlayView(context: Context) : View(context), Choreographer.FrameCal
         startFrameLoopIfNeeded()
     }
 
+    fun releaseAllButtons() {
+        springController.releaseAll()
+        startFrameLoopIfNeeded()
+    }
+
     private fun startFrameLoopIfNeeded() {
         if (!frameLoopRunning) {
             frameLoopRunning = true
-            lastFrameNanos = System.nanoTime()
+            lastFrameNanos = 0L
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
 
     fun stopAnimationLoop() {
         frameLoopRunning = false
+        lastFrameNanos = 0L
         Choreographer.getInstance().removeFrameCallback(this)
     }
 

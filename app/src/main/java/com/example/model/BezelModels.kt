@@ -112,7 +112,7 @@ data class BezelConfig(
     val masterEnabled: Boolean = true,
     val keepAliveForeground: Boolean = true,
     val autoStartOnBoot: Boolean = true,
-    val powerWakePulseEnabled: Boolean = true,
+    val powerWakePulseEnabled: Boolean = false,
     val pauseInLandscape: Boolean = true,
     val style: BezelStyle = BezelStyle.LIQUID_BULGE,
     val maxDepthDp: Float = 16f,

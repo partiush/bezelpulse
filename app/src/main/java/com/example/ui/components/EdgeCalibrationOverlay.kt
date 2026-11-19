@@ -93,8 +93,11 @@ fun EdgeCalibrationOverlay(
     BackHandler { onDone() }
 
     val enabledButtons = remember(config.buttons) { config.buttons.filter { it.enabled } }
-    var selectedButtonId by remember(enabledButtons) {
+    var selectedButtonId by remember {
         mutableStateOf(enabledButtons.firstOrNull()?.id ?: "")
+    }
+    if (enabledButtons.isNotEmpty() && enabledButtons.none { it.id == selectedButtonId }) {
+        selectedButtonId = enabledButtons.first().id
     }
     var draggingButtonId by remember { mutableStateOf<String?>(null) }
 
@@ -498,7 +501,7 @@ private fun CalibrationNudgeButton(
 ) {
     Surface(
         modifier = modifier
-            .height(44.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),

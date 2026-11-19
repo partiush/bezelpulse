@@ -85,8 +85,8 @@ object BezelGeometry {
             }
 
             BezelStyle.TACTILE_PILL -> {
-                val pillWidth = (depthPx * 0.62f).coerceAtLeast(4f)
-                val gap = (depthPx * 0.38f).coerceAtLeast(1.5f)
+                val pillWidth = (depthPx * 0.62f).coerceAtLeast(0.5f)
+                val gap = depthPx * 0.34f
                 val halfH = lengthPx * (0.46f + shoulderSpread * 0.14f)
                 val radius = (pillWidth * 0.5f).coerceAtMost(halfH * 0.5f)
 
@@ -105,24 +105,43 @@ object BezelGeometry {
                 val bottomY = centerY + halfSpan
                 val arcDepth = depthPx * 0.68f
                 val arcPeakX = edgeX + dir * arcDepth
-                val crownHalf = lengthPx * (0.14f + peakFlatness * 0.34f)
+                val crownHalf = (lengthPx * (0.14f + peakFlatness * 0.34f)).coerceAtMost(halfSpan * 0.72f)
+                val crownTopY = centerY - crownHalf
+                val crownBottomY = centerY + crownHalf
+                val topSpan = crownTopY - topY
+                val bottomSpan = bottomY - crownBottomY
 
                 rimPath.moveTo(edgeX, topY)
                 rimPath.cubicTo(
-                    edgeX, topY + (centerY - crownHalf - topY) * 0.55f,
-                    arcPeakX, centerY - crownHalf - (centerY - crownHalf - topY) * 0.35f,
-                    arcPeakX, centerY - crownHalf
+                    edgeX, topY + topSpan * 0.55f,
+                    arcPeakX, crownTopY - topSpan * 0.35f,
+                    arcPeakX, crownTopY
                 )
-                rimPath.lineTo(arcPeakX, centerY + crownHalf)
+                if (crownBottomY > crownTopY + 0.5f) {
+                    rimPath.lineTo(arcPeakX, crownBottomY)
+                }
                 rimPath.cubicTo(
-                    arcPeakX, centerY + crownHalf + (bottomY - (centerY + crownHalf)) * 0.35f,
-                    edgeX, bottomY - (bottomY - (centerY + crownHalf)) * 0.55f,
+                    arcPeakX, crownBottomY + bottomSpan * 0.35f,
+                    edgeX, bottomY - bottomSpan * 0.55f,
                     edgeX, bottomY
                 )
 
                 val tuckX = edgeX - dir * 2f
                 outPath.moveTo(tuckX, topY)
-                outPath.addPath(rimPath)
+                outPath.lineTo(edgeX, topY)
+                outPath.cubicTo(
+                    edgeX, topY + topSpan * 0.55f,
+                    arcPeakX, crownTopY - topSpan * 0.35f,
+                    arcPeakX, crownTopY
+                )
+                if (crownBottomY > crownTopY + 0.5f) {
+                    outPath.lineTo(arcPeakX, crownBottomY)
+                }
+                outPath.cubicTo(
+                    arcPeakX, crownBottomY + bottomSpan * 0.35f,
+                    edgeX, bottomY - bottomSpan * 0.55f,
+                    edgeX, bottomY
+                )
                 outPath.lineTo(tuckX, bottomY)
                 outPath.close()
             }

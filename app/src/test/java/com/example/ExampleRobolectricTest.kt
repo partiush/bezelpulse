@@ -1,14 +1,17 @@
 package com.example
 
 import android.content.Context
+import android.graphics.Path
 import android.view.KeyEvent
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.BezelConfigCodec
+import com.example.engine.BezelGeometry
 import com.example.model.BezelConfig
 import com.example.model.BezelSide
 import com.example.model.BezelStyle
 import com.example.model.ButtonConfig
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,5 +58,31 @@ class ExampleRobolectricTest {
         assertEquals(0.72f, imported.dampingRatio, 0.01f)
         assertEquals(false, imported.pauseInLandscape)
         assertTrue(imported.buttons.any { it.id == "custom_cam" && it.keyCode == KeyEvent.KEYCODE_CAMERA })
+    }
+
+    @Test
+    fun geometryBuildsNonEmptyPathsForAllStylesAndEdges() {
+        val fillPath = Path()
+        val rimPath = Path()
+
+        for (style in BezelStyle.entries) {
+            for (side in BezelSide.entries) {
+                val edgeX = if (side == BezelSide.RIGHT) 1080f else 0f
+                BezelGeometry.buildAndroidPath(
+                    outPath = fillPath,
+                    rimPath = rimPath,
+                    style = style,
+                    side = side,
+                    edgeX = edgeX,
+                    centerY = 800f,
+                    lengthPx = 180f,
+                    depthPx = 42f,
+                    shoulderSpread = 0.58f,
+                    peakFlatness = 0.35f
+                )
+                assertFalse("Fill path must not be empty for $style / $side", fillPath.isEmpty)
+                assertFalse("Rim path must not be empty for $style / $side", rimPath.isEmpty)
+            }
+        }
     }
 }

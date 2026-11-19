@@ -33,12 +33,15 @@ import kotlinx.coroutines.launch
  * System-wide hardware key listener and overlay host.
  *
  * Always returns false from [onKeyEvent] so normal OS volume and power handling is never delayed.
- * Because Android's PhoneWindowManager intercepts short KEYCODE_POWER clicks before Accessibility
- * services receive them, Power animations are driven through multiple OS-level hooks:
- *  - Direct key events (KEYCODE_POWER / SLEEP / WAKEUP / SOFT_SLEEP) where forwarded
- *  - DisplayManager state transitions (STATE_OFF/DOZE <-> STATE_ON) for earliest wake/sleep onset
- *  - ACTION_SCREEN_ON, ACTION_SCREEN_OFF, and ACTION_USER_PRESENT broadcasts
- *  - Window state detection for long-press Power menus and Assistant invocations
+ *
+ * Power button behavior:
+ *  - Direct hardware key events (KEYCODE_POWER / SLEEP / WAKEUP / SOFT_SLEEP) drive true
+ *    press, continuous hold swell, and release animations whenever forwarded by the OS.
+ *  - Long-pressing the Power button on Android 12-16 opens the Power Menu (GlobalActions) or
+ *    Assistant dialog, which triggers a sustained hold animation that stays expanded while the
+ *    menu is active and releases smoothly when dismissed.
+ *  - Screen wake/lock display transitions are strictly opt-in ([BezelConfig.powerWakePulseEnabled])
+ *    so tap-to-wake, lift-to-wake, and lock-screen unlocks never cause false animations by default.
  */
 class BezelAccessibilityService : AccessibilityService() {
 
@@ -51,7 +54,14 @@ class BezelAccessibilityService : AccessibilityService() {
     private var lastDisplayState: Int = Display.STATE_UNKNOWN
     private var lastPowerWakePulseMs: Long = 0L
     private var lastPowerSleepPulseMs: Long = 0L
-    private var lastPowerMenuPulseMs: Long = 0L
+    private var lastPowerMenuHoldMs: Long = 0L
+
+    private var isDirectPowerKeyHeld: Boolean = false
+    private var isPowerMenuHoldActive: Boolean = false
+
+    private val powerMenuAutoReleaseRunnable = Runnable {
+        releasePowerMenuHold()
+    }
 
     private val busListener = BezelRuntimeBus.ButtonListener { buttonId, isDown, isPulseOnly, holdOverrideMs ->
         mainHandler.post {
@@ -83,10 +93,13 @@ class BezelAccessibilityService : AccessibilityService() {
             val isGoingToSleep = prevState == Display.STATE_ON &&
                 (newState == Display.STATE_OFF || newState == Display.STATE_DOZE || newState == Display.STATE_DOZE_SUSPEND)
 
-            if (wasAsleep && isNowAwake && cfg.powerWakePulseEnabled) {
+            if (isGoingToSleep) {
+                clearHeldStateOnScreenOff()
+                if (cfg.powerWakePulseEnabled) {
+                    triggerSleepPowerPulse("Display Sleep")
+                }
+            } else if (wasAsleep && isNowAwake && cfg.powerWakePulseEnabled) {
                 scheduleWakePowerPulse("Display Wake")
-            } else if (isGoingToSleep) {
-                triggerSleepPowerPulse("Display Sleep")
             }
         }
     }
@@ -103,23 +116,16 @@ class BezelAccessibilityService : AccessibilityService() {
                         scheduleWakePowerPulse("Screen Wake")
                     }
                 }
-                Intent.ACTION_USER_PRESENT -> {
-                    // Fires cleanly when unlocking via a side-mounted Power+fingerprint button
-                    if (cfg.powerWakePulseEnabled) {
-                        val now = SystemClock.uptimeMillis()
-                        if (now - lastPowerWakePulseMs > 550L) {
-                            lastPowerWakePulseMs = now
-                            dispatchPowerPulse("Unlock", holdOverrideMs = 200L)
-                        }
-                    }
-                }
                 Intent.ACTION_SCREEN_OFF -> {
-                    triggerSleepPowerPulse("Screen Lock")
+                    clearHeldStateOnScreenOff()
+                    if (cfg.powerWakePulseEnabled) {
+                        triggerSleepPowerPulse("Screen Lock")
+                    }
                 }
                 Intent.ACTION_CLOSE_SYSTEM_DIALOGS -> {
                     val reason = intent.getStringExtra("reason").orEmpty().lowercase()
-                    if (reason == "globalactions" || reason == "lock" || reason == "assist") {
-                        triggerMenuPowerPulse("Power Action")
+                    if (reason == "globalactions") {
+                        startPowerMenuHold("Power Hold")
                     }
                 }
             }
@@ -150,7 +156,6 @@ class BezelAccessibilityService : AccessibilityService() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
-            addAction(Intent.ACTION_USER_PRESENT)
             @Suppress("DEPRECATION")
             addAction(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
         }
@@ -223,13 +228,11 @@ class BezelAccessibilityService : AccessibilityService() {
         if (shouldSkipForOrientation(cfg)) return false
 
         val isDown = when (event.action) {
-            KeyEvent.ACTION_DOWN -> {
-                if (event.repeatCount > 0) return false
-                true
-            }
+            KeyEvent.ACTION_DOWN -> true
             KeyEvent.ACTION_UP -> false
             else -> return false
         }
+        val isInitialPress = isDown && event.repeatCount == 0
 
         val normalizedCode = when (event.keyCode) {
             KeyEvent.KEYCODE_SLEEP,
@@ -238,16 +241,23 @@ class BezelAccessibilityService : AccessibilityService() {
             else -> event.keyCode
         }
 
+        if (normalizedCode == KeyEvent.KEYCODE_POWER) {
+            isDirectPowerKeyHeld = isDown
+            if (isDown) {
+                lastPowerWakePulseMs = SystemClock.uptimeMillis()
+                lastPowerSleepPulseMs = lastPowerWakePulseMs
+            } else if (isPowerMenuHoldActive) {
+                isPowerMenuHoldActive = false
+                mainHandler.removeCallbacks(powerMenuAutoReleaseRunnable)
+            }
+        }
+
         val matched = BezelRuntimeBus.dispatchKeyCode(
             keyCode = normalizedCode,
             isDown = isDown,
-            sourceLabel = "Hardware Key"
+            sourceLabel = if (isDown && event.repeatCount > 0) "Hardware Hold" else "Hardware Key"
         )
-        if (matched && isDown) {
-            if (normalizedCode == KeyEvent.KEYCODE_POWER) {
-                lastPowerWakePulseMs = SystemClock.uptimeMillis()
-                lastPowerSleepPulseMs = lastPowerWakePulseMs
-            }
+        if (matched && isInitialPress) {
             BezelRuntimeBus.triggerHaptic(applicationContext, isPress = true)
         }
 
@@ -262,17 +272,72 @@ class BezelAccessibilityService : AccessibilityService() {
         val className = event.className?.toString().orEmpty().lowercase()
         val pkgName = event.packageName?.toString().orEmpty().lowercase()
 
-        val isPowerOrAssistDialog = className.contains("globalactions") ||
+        val isPowerDialog = className.contains("globalactions") ||
             className.contains("powermenu") ||
             className.contains("powerdialog") ||
             className.contains("shutdown") ||
             className.contains("rebootdialog") ||
-            className.contains("voiceinteraction") ||
             (pkgName.contains("systemui") && (className.contains("power") || className.contains("globalaction"))) ||
             (pkgName.contains("miui") && (className.contains("power") || className.contains("globalaction")))
 
-        if (isPowerOrAssistDialog) {
-            triggerMenuPowerPulse("Power Menu")
+        if (isPowerDialog) {
+            startPowerMenuHold("Power Hold")
+        } else if (isPowerMenuHoldActive && className.isNotEmpty()) {
+            // Power menu closed or user switched back to an app — release the sustained hold smoothly.
+            releasePowerMenuHold()
+        }
+    }
+
+    private fun startPowerMenuHold(source: String) {
+        val now = SystemClock.uptimeMillis()
+        if (isDirectPowerKeyHeld) return
+        if (isPowerMenuHoldActive) {
+            // Extend hold window while menu stays active
+            mainHandler.removeCallbacks(powerMenuAutoReleaseRunnable)
+            mainHandler.postDelayed(powerMenuAutoReleaseRunnable, POWER_MENU_HOLD_CAP_MS)
+            return
+        }
+        if (now - lastPowerMenuHoldMs < 350L) return
+        lastPowerMenuHoldMs = now
+        isPowerMenuHoldActive = true
+
+        val powerTargets = activePowerTargets()
+        for (btn in powerTargets) {
+            BezelRuntimeBus.dispatchButtonEvent(
+                buttonId = btn.id,
+                isDown = true,
+                sourceLabel = source,
+                isPulseOnly = false
+            )
+        }
+        if (powerTargets.isNotEmpty()) {
+            BezelRuntimeBus.triggerHaptic(applicationContext, isPress = true)
+        }
+
+        mainHandler.removeCallbacks(powerMenuAutoReleaseRunnable)
+        mainHandler.postDelayed(powerMenuAutoReleaseRunnable, POWER_MENU_HOLD_CAP_MS)
+    }
+
+    private fun releasePowerMenuHold() {
+        mainHandler.removeCallbacks(powerMenuAutoReleaseRunnable)
+        if (!isPowerMenuHoldActive) return
+        isPowerMenuHoldActive = false
+
+        for (btn in activePowerTargets()) {
+            BezelRuntimeBus.dispatchButtonEvent(
+                buttonId = btn.id,
+                isDown = false,
+                sourceLabel = "Power Release",
+                isPulseOnly = false
+            )
+        }
+    }
+
+    private fun clearHeldStateOnScreenOff() {
+        isDirectPowerKeyHeld = false
+        releasePowerMenuHold()
+        mainHandler.post {
+            overlayView?.releaseAllButtons()
         }
     }
 
@@ -281,13 +346,12 @@ class BezelAccessibilityService : AccessibilityService() {
         if (now - lastPowerWakePulseMs < 500L) return
         lastPowerWakePulseMs = now
 
-        // Give the display panel ~180ms to ramp out of dark wake fade so the animation is clearly visible.
         mainHandler.postDelayed({
             val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
             if (pm != null && !pm.isInteractive) return@postDelayed
             ensureOverlayAttached()
-            dispatchPowerPulse(source, holdOverrideMs = 280L)
-        }, 180L)
+            dispatchPowerPulse(source, holdOverrideMs = 260L)
+        }, 160L)
     }
 
     private fun triggerSleepPowerPulse(source: String) {
@@ -297,18 +361,12 @@ class BezelAccessibilityService : AccessibilityService() {
         dispatchPowerPulse(source, holdOverrideMs = 150L)
     }
 
-    private fun triggerMenuPowerPulse(source: String) {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastPowerMenuPulseMs < 450L) return
-        lastPowerMenuPulseMs = now
-        dispatchPowerPulse(source, holdOverrideMs = 240L)
+    private fun activePowerTargets() = BezelRuntimeBus.config.value.buttons.filter {
+        it.enabled && (it.id == ButtonIds.POWER || it.keyCode == KeyEvent.KEYCODE_POWER)
     }
 
     private fun dispatchPowerPulse(source: String, holdOverrideMs: Long) {
-        val cfg = BezelRuntimeBus.config.value
-        val powerTargets = cfg.buttons.filter {
-            it.enabled && (it.id == ButtonIds.POWER || it.keyCode == KeyEvent.KEYCODE_POWER)
-        }
+        val powerTargets = activePowerTargets()
         for (btn in powerTargets) {
             BezelRuntimeBus.dispatchButtonEvent(
                 buttonId = btn.id,
@@ -338,6 +396,9 @@ class BezelAccessibilityService : AccessibilityService() {
     }
 
     private fun cleanup() {
+        mainHandler.removeCallbacksAndMessages(null)
+        isDirectPowerKeyHeld = false
+        isPowerMenuHoldActive = false
         BezelRuntimeBus.setServiceConnected(false)
         BezelRuntimeBus.unregisterListener(busListener)
         runCatching { displayManager?.unregisterDisplayListener(displayListener) }
@@ -348,5 +409,9 @@ class BezelAccessibilityService : AccessibilityService() {
         }
         overlayView = null
         serviceScope.cancel()
+    }
+
+    companion object {
+        private const val POWER_MENU_HOLD_CAP_MS = 1500L
     }
 }

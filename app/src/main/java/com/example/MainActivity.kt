@@ -124,20 +124,18 @@ class MainActivity : ComponentActivity() {
 
         if (!BezelRuntimeBus.serviceConnected.value) {
             val isDown = when (event.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount > 0) return super.dispatchKeyEvent(event)
-                    true
-                }
+                KeyEvent.ACTION_DOWN -> true
                 KeyEvent.ACTION_UP -> false
                 else -> return super.dispatchKeyEvent(event)
             }
+            val isInitialPress = isDown && event.repeatCount == 0
 
             val matched = BezelRuntimeBus.dispatchKeyCode(
                 keyCode = event.keyCode,
                 isDown = isDown,
-                sourceLabel = "Physical Key"
+                sourceLabel = if (isDown && event.repeatCount > 0) "Physical Hold" else "Physical Key"
             )
-            if (matched && isDown) {
+            if (matched && isInitialPress) {
                 BezelRuntimeBus.triggerHaptic(applicationContext, isPress = true)
             }
         }

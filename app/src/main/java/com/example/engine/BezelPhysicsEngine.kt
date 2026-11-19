@@ -31,6 +31,7 @@ class ButtonSpringState(val buttonId: String) {
         private set
 
     private var pressStartTimeMs: Long = 0L
+    private var lastHoldHeartbeatMs: Long = 0L
     private var releasePending: Boolean = false
     private var pulseRenderedMs: Float = 0f
     private var pulseTargetHoldMs: Float = 0f
@@ -39,16 +40,25 @@ class ButtonSpringState(val buttonId: String) {
         if (!isPhysicallyPressed) {
             isPhysicallyPressed = true
             pressStartTimeMs = nowMs
+            lastHoldHeartbeatMs = nowMs
             releasePending = false
             pulseRenderedMs = 0f
             pulseTargetHoldMs = 0f
-            if (velocity < 2.2f) {
-                velocity += 2.2f
-            }
+            val baseVelocity = if (velocity < 0f) 0f else velocity
+            velocity = (baseVelocity + 2.4f).coerceAtMost(10.5f)
+        } else {
+            lastHoldHeartbeatMs = nowMs
+        }
+    }
+
+    fun refreshHold(nowMs: Long = SystemClock.uptimeMillis()) {
+        if (isPhysicallyPressed) {
+            lastHoldHeartbeatMs = nowMs
         }
     }
 
     fun onRelease(nowMs: Long = SystemClock.uptimeMillis(), minHoldMs: Long) {
+        if (!isPhysicallyPressed && !releasePending) return
         isPhysicallyPressed = false
         val heldMs = (nowMs - pressStartTimeMs).coerceAtLeast(0L)
         if (heldMs < minHoldMs) {
@@ -60,15 +70,21 @@ class ButtonSpringState(val buttonId: String) {
         }
     }
 
+    fun forceRelease() {
+        isPhysicallyPressed = false
+        releasePending = false
+        pulseTargetHoldMs = 0f
+    }
+
     fun triggerPulse(nowMs: Long = SystemClock.uptimeMillis(), holdDurationOverrideMs: Long? = null) {
         isPhysicallyPressed = false
         pressStartTimeMs = nowMs
+        lastHoldHeartbeatMs = nowMs
         releasePending = true
         pulseRenderedMs = 0f
         pulseTargetHoldMs = (holdDurationOverrideMs ?: 0L).toFloat()
-        if (velocity < 3.4f) {
-            velocity += 3.4f
-        }
+        val baseVelocity = if (velocity < 0f) 0f else velocity
+        velocity = (baseVelocity + 3.4f).coerceAtMost(11.5f)
     }
 
     fun isActive(): Boolean {
@@ -77,6 +93,12 @@ class ButtonSpringState(val buttonId: String) {
 
     fun step(dtSeconds: Float, config: BezelConfig, nowMs: Long = SystemClock.uptimeMillis()): Boolean {
         val clampedDt = dtSeconds.coerceIn(0.0005f, 0.033f)
+
+        // Guard against Android dropping ACTION_UP during window focus loss or screen lock
+        if (isPhysicallyPressed && (nowMs - lastHoldHeartbeatMs) > MAX_STUCK_HOLD_MS) {
+            isPhysicallyPressed = false
+            releasePending = false
+        }
 
         if (releasePending) {
             val requiredHoldMs = if (pulseTargetHoldMs > 0f) pulseTargetHoldMs else config.minPressHoldMs.toFloat()
@@ -90,7 +112,7 @@ class ButtonSpringState(val buttonId: String) {
         val target = when {
             isPhysicallyPressed -> {
                 val heldMs = (nowMs - pressStartTimeMs).coerceAtLeast(0L)
-                val sustainFraction = ((heldMs - 140L).coerceAtLeast(0L) / 240f).coerceIn(0f, 1f)
+                val sustainFraction = ((heldMs - 120L).coerceAtLeast(0L) / 220f).coerceIn(0f, 1f)
                 1.0f + (config.holdBoostMultiplier - 1.0f) * sustainFraction
             }
             releasePending -> 1.0f
@@ -102,6 +124,7 @@ class ButtonSpringState(val buttonId: String) {
         val k = config.stiffness.coerceIn(120f, 2000f)
         val zeta = config.dampingRatio.coerceIn(0.25f, 1.2f)
         val c = 2f * zeta * sqrt(k)
+        val maxAllowedDisplacement = maxOf(1.85f, config.holdBoostMultiplier + 0.35f)
 
         for (i in 0 until subSteps) {
             val force = -k * (displacement - target) - c * velocity
@@ -110,6 +133,9 @@ class ButtonSpringState(val buttonId: String) {
             if (displacement < 0f && target == 0f) {
                 displacement = 0f
                 if (velocity < 0f) velocity = -velocity * 0.12f
+            } else if (displacement > maxAllowedDisplacement) {
+                displacement = maxAllowedDisplacement
+                if (velocity > 0f) velocity = 0f
             }
         }
 
@@ -119,6 +145,10 @@ class ButtonSpringState(val buttonId: String) {
             return false
         }
         return true
+    }
+
+    companion object {
+        const val MAX_STUCK_HOLD_MS: Long = 6000L
     }
 }
 
@@ -139,6 +169,12 @@ class BezelSpringController {
 
     fun triggerPulse(buttonId: String, holdOverrideMs: Long? = null) {
         stateFor(buttonId).triggerPulse(holdDurationOverrideMs = holdOverrideMs)
+    }
+
+    fun releaseAll() {
+        for (state in states.values) {
+            state.forceRelease()
+        }
     }
 
     fun stepAll(dtSeconds: Float, config: BezelConfig): Boolean {

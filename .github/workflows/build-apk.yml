@@ -1,4 +1,4 @@
-name: Build BezelPulse APK
+name: Release BezelPulse APK
 
 on:
   push:
@@ -14,22 +14,22 @@ on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: 'Publish APK as a GitHub Release (direct .apk download)'
+        description: 'Publish signed Release APK to GitHub Releases'
         required: false
-        default: false
+        default: true
         type: boolean
       release_tag:
-        description: 'Release tag name (e.g. v1.0.0; defaults to v1.0.<run_number>)'
+        description: 'Version tag (e.g. v1.0.0, v1.0.1, v1.1.0)'
         required: false
-        default: ''
+        default: 'v1.0.0'
         type: string
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Test & Build APK
+  build-release:
+    name: Test & Build Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -53,72 +53,116 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Prepare debug signing keystore
+      - name: Resolve semantic version and monotonic versionCode
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          RUN_NUM: ${{ github.run_number }}
         run: |
+          if [ "$IS_TAG" = "true" ]; then
+            TAG="$REF_NAME"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="v1.0.0"
+          fi
+
+          # Normalize tag to always start with 'v'
+          case "$TAG" in
+            v*) ;;
+            *) TAG="v$TAG" ;;
+          esac
+
+          CLEAN_VER="${TAG#v}"
+          BASE_VER="${CLEAN_VER%%-*}"
+          IFS='.' read -r MAJOR MINOR PATCH _ <<< "$BASE_VER"
+          MAJOR="${MAJOR:-1}"
+          MINOR="${MINOR:-0}"
+          PATCH="${PATCH:-0}"
+
+          # Numeric check fallback
+          if [[ "$MAJOR" =~ ^[0-9]+$ ]] && [[ "$MINOR" =~ ^[0-9]+$ ]] && [[ "$PATCH" =~ ^[0-9]+$ ]]; then
+            VER_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+          else
+            VER_CODE=$(( 10000 + RUN_NUM ))
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$CLEAN_VER" >> "$GITHUB_OUTPUT"
+          echo "code=$VER_CODE" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: tag=$TAG versionName=$CLEAN_VER versionCode=$VER_CODE"
+
+      - name: Prepare consistent signing keystores
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # Always decode the repository keystore for unit tests & consistent fallback signing
           if [ -f debug.keystore.base64 ]; then
             tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
           elif [ ! -f debug.keystore ]; then
             keytool -genkeypair -v -keystore debug.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+              -dname "CN=BezelPulse,O=BezelPulse,C=US"
           fi
 
-      - name: Run unit tests
-        run: gradle :app:testDebugUnitTest --no-daemon
-
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
-
-      - name: Collect APKs
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          mkdir -p release-apks
-          cp app/build/outputs/apk/debug/app-debug.apk release-apks/BezelPulse-debug.apk
-
+          # Use private release keystore from GitHub Secrets if configured; otherwise import the
+          # repository's deterministic key so every future release updates seamlessly in-place.
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > my-upload-key.jks
-            gradle :app:assembleRelease --no-daemon
-            cp app/build/outputs/apk/release/app-release.apk release-apks/BezelPulse-release.apk
+            echo "store_password=$STORE_PASSWORD" >> "$GITHUB_OUTPUT"
+            echo "key_password=$KEY_PASSWORD" >> "$GITHUB_OUTPUT"
+            echo "Using private release keystore from repository secrets."
+          else
             rm -f my-upload-key.jks
+            keytool -importkeystore \
+              -srckeystore debug.keystore -srcstorepass android -srcalias androiddebugkey \
+              -destkeystore my-upload-key.jks -deststorepass android -destalias upload -destkeypass android \
+              -noprompt
+            echo "store_password=android" >> "$GITHUB_OUTPUT"
+            echo "key_password=android" >> "$GITHUB_OUTPUT"
+            echo "Using deterministic repository signing certificate for consistent in-place updates."
           fi
 
+      - name: Run unit & Robolectric tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build signed Release APK
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          STORE_PASSWORD: ${{ steps.signing.outputs.store_password }}
+          KEY_PASSWORD: ${{ steps.signing.outputs.key_password }}
+        run: |
+          gradle :app:assembleRelease --no-daemon
+          mkdir -p release-apks
+          cp app/build/outputs/apk/release/app-release.apk "release-apks/BezelPulse-${{ steps.version.outputs.tag }}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "release-apks/BezelPulse.apk"
+          rm -f my-upload-key.jks
           ls -lh release-apks/
 
-      - name: Upload APK artifact
+      - name: Upload Release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BezelPulse-APK
-          path: release-apks/*.apk
+          name: BezelPulse-${{ steps.version.outputs.tag }}-Release
+          path: release-apks/BezelPulse-*.apk
           retention-days: 30
           if-no-files-found: error
-
-      - name: Resolve release tag
-        id: release_meta
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          INPUT_TAG: ${{ inputs.release_tag }}
-          RUN_NUM: ${{ github.run_number }}
-        run: |
-          if [ "$IS_TAG" = "true" ]; then
-            TAG="$REF_NAME"
-          elif [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"
-          else
-            TAG="v1.0.$RUN_NUM"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          name: "BezelPulse ${{ steps.release_meta.outputs.tag }}"
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "BezelPulse ${{ steps.version.outputs.tag }}"
           generate_release_notes: true
-          files: release-apks/*.apk
+          make_latest: true
+          files: |
+            release-apks/BezelPulse-${{ steps.version.outputs.tag }}.apk
+            release-apks/BezelPulse.apk

@@ -308,7 +308,7 @@ fun ButtonsScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "Most Android devices handle short Power-off clicks in the system framework before apps receive the key event. BezelPulse automatically triggers the Power animation on screen wake, lock, and long-press power menus.",
+                            text = "Direct Power presses and long-press Power menus trigger native press and sustained hold animations. If your device blocks short Power key events, you can optionally enable Power Wake / Lock Fallback in the Studio tab.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
