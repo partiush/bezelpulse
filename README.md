@@ -5,13 +5,13 @@ An open-source Android app that adds smooth, iOS-style bezel press animations fo
 BezelPulse draws directly onto a hardware-accelerated `Canvas` synced to your display's VSYNC (`Choreographer`), delivering responsive 60/90/120Hz edge animations with 0% idle CPU usage.
 
 <p align="left">
-  <a href="../../releases/latest">
+  <a href="https://github.com/partiush/bezelpulse/releases/latest">
     <img src="https://img.shields.io/badge/Download_from_GitHub-Latest_Release-0EA5E9?style=for-the-badge&logo=android&logoColor=white" alt="Download from GitHub" />
   </a>
-  <a href="../../releases/latest/download/BezelPulse.apk">
+  <a href="https://github.com/partiush/bezelpulse/releases/latest/download/BezelPulse.apk">
     <img src="https://img.shields.io/badge/Direct_Download-BezelPulse.apk-10B981?style=for-the-badge&logo=github&logoColor=white" alt="Direct APK Download" />
   </a>
-  <a href="../../issues/new/choose">
+  <a href="https://github.com/partiush/bezelpulse/issues/new/choose">
     <img src="https://img.shields.io/badge/Report_a_Bug-GitHub_Issues-F59E0B?style=for-the-badge&logo=github&logoColor=white" alt="Report a Bug" />
   </a>
 </p>
@@ -59,7 +59,7 @@ Stock Android devices generally keep Accessibility services active automatically
 
 `v1.0.0` is the initial public release. Because Android hardware button handling, screen shapes, and OEM skins vary widely across devices, you may still encounter bugs, visual glitches, or device-specific quirks.
 
-If something does not work as expected on your device, please **[open an issue](../../issues/new/choose)** with your device model, Android version, and steps to reproduce so it can be fixed in future releases.
+If something does not work as expected on your device, please **[open an issue](https://github.com/partiush/bezelpulse/issues/new/choose)** with your device model, Android version, and steps to reproduce so it can be fixed in future releases.
 
 ---
 
