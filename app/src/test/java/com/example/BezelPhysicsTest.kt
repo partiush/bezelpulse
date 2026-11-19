@@ -91,4 +91,28 @@ class BezelPhysicsTest {
         val afterRemovingCustom = afterRemovingBuiltIn.removeButton("custom_action")
         assertEquals(initialCount, afterRemovingCustom.buttons.size)
     }
+
+    @Test
+    fun pulseSurvivesDisplayWakeVsyncStall() {
+        val config = BezelConfig(stiffness = 760f, dampingRatio = 0.90f)
+        val spring = ButtonSpringState(ButtonIds.POWER)
+
+        // Trigger pulse at t = 1000ms, then simulate a 450ms display wake stall before frame #1 arrives
+        spring.triggerPulse(nowMs = 1000L, holdDurationOverrideMs = 260L)
+
+        var nowMs = 1450L
+        var peakDisplacement = 0f
+        repeat(20) {
+            nowMs += 16L
+            spring.step(0.016f, config, nowMs)
+            if (spring.displacement > peakDisplacement) {
+                peakDisplacement = spring.displacement
+            }
+        }
+
+        assertTrue(
+            "Power pulse must still reach full protrusion after a VSYNC wake stall (peak=$peakDisplacement)",
+            peakDisplacement > 0.80f
+        )
+    }
 }

@@ -9,31 +9,32 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.example.R
 
-enum class OemVendor {
-    XIAOMI,
-    SAMSUNG,
-    ONEPLUS_OPPO,
-    VIVO,
-    HUAWEI_HONOR,
-    ASUS,
-    STANDARD
-}
-
+/**
+ * Resolves standard and vendor-specific system settings screens for battery optimization
+ * and background auto-start across Android devices, falling back cleanly to App Details.
+ */
 object OemSupport {
 
-    fun detectVendor(): OemVendor {
-        val mfr = Build.MANUFACTURER.orEmpty().lowercase()
-        val brand = Build.BRAND.orEmpty().lowercase()
-        val combined = "$mfr $brand"
+    private enum class Vendor {
+        XIAOMI,
+        SAMSUNG,
+        ONEPLUS_OPPO,
+        VIVO,
+        HUAWEI_HONOR,
+        ASUS,
+        GENERIC
+    }
 
+    private fun detectVendor(): Vendor {
+        val combined = "${Build.MANUFACTURER.orEmpty()} ${Build.BRAND.orEmpty()}".lowercase()
         return when {
-            combined.contains("xiaomi") || combined.contains("redmi") || combined.contains("poco") -> OemVendor.XIAOMI
-            combined.contains("samsung") -> OemVendor.SAMSUNG
-            combined.contains("oneplus") || combined.contains("oppo") || combined.contains("realme") -> OemVendor.ONEPLUS_OPPO
-            combined.contains("vivo") || combined.contains("iqoo") -> OemVendor.VIVO
-            combined.contains("huawei") || combined.contains("honor") -> OemVendor.HUAWEI_HONOR
-            combined.contains("asus") -> OemVendor.ASUS
-            else -> OemVendor.STANDARD
+            combined.contains("xiaomi") || combined.contains("redmi") || combined.contains("poco") -> Vendor.XIAOMI
+            combined.contains("samsung") -> Vendor.SAMSUNG
+            combined.contains("oneplus") || combined.contains("oppo") || combined.contains("realme") -> Vendor.ONEPLUS_OPPO
+            combined.contains("vivo") || combined.contains("iqoo") -> Vendor.VIVO
+            combined.contains("huawei") || combined.contains("honor") -> Vendor.HUAWEI_HONOR
+            combined.contains("asus") -> Vendor.ASUS
+            else -> Vendor.GENERIC
         }
     }
 
@@ -42,30 +43,14 @@ object OemSupport {
         return runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)
     }
 
-    fun backgroundHintForDevice(): String = when (detectVendor()) {
-        OemVendor.XIAOMI ->
-            "On Xiaomi / HyperOS devices, set Battery Saver to \"No restrictions\" and enable Background Autostart so the system does not pause Accessibility."
-        OemVendor.SAMSUNG ->
-            "On Samsung One UI, set Battery to \"Unrestricted\" and make sure BezelPulse is not listed under Sleeping or Deep Sleeping apps."
-        OemVendor.ONEPLUS_OPPO ->
-            "On OxygenOS / ColorOS, enable \"Allow background activity\" and \"Allow auto-launch\" in App Management so animations stay active after clearing recents."
-        OemVendor.VIVO ->
-            "On Vivo / iQOO devices, allow \"Autostart\" and set background power consumption to \"Unrestricted\"."
-        OemVendor.HUAWEI_HONOR ->
-            "On Huawei / Honor devices, switch App Launch to Manual and enable Auto-launch and Run in background."
-        OemVendor.ASUS ->
-            "On Asus devices, allow BezelPulse in Auto-start Manager and exclude it from battery optimization."
-        OemVendor.STANDARD ->
-            "Set battery usage to \"Unrestricted\" so Android keeps the hardware key listener responsive after clearing recent apps or rebooting."
-    }
-
-    fun hasDedicatedAutoStartScreen(): Boolean = detectVendor() != OemVendor.STANDARD
+    fun universalBackgroundHint(): String =
+        "For reliable background operation on any Android device, set Battery usage to Unrestricted and allow Auto-Start / Background activity in system settings."
 
     fun openBatterySettings(context: Context) {
         val pkg = context.packageName
         val appName = context.getString(R.string.app_name)
         val candidates = buildList {
-            if (detectVendor() == OemVendor.XIAOMI) {
+            if (detectVendor() == Vendor.XIAOMI) {
                 add(
                     Intent().apply {
                         component = ComponentName(
@@ -86,36 +71,36 @@ object OemSupport {
     fun openAutoStartSettings(context: Context) {
         val pkg = context.packageName
         val candidates = when (detectVendor()) {
-            OemVendor.XIAOMI -> listOf(
+            Vendor.XIAOMI -> listOf(
                 componentIntent("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
                 Intent("miui.intent.action.OP_AUTO_START").apply { addCategory(Intent.CATEGORY_DEFAULT) },
                 appDetailsIntent(pkg)
             )
-            OemVendor.SAMSUNG -> listOf(
+            Vendor.SAMSUNG -> listOf(
                 componentIntent("com.samsung.android.lool", "com.samsung.android.sm.battery.ui.BatteryActivity"),
                 componentIntent("com.samsung.android.sm", "com.samsung.android.sm.battery.ui.BatteryActivity"),
                 appDetailsIntent(pkg)
             )
-            OemVendor.ONEPLUS_OPPO -> listOf(
+            Vendor.ONEPLUS_OPPO -> listOf(
                 componentIntent("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
                 componentIntent("com.oplus.battery", "com.oplus.powermanager.fuelgaue.PowerUsageModelActivity"),
                 componentIntent("com.oneplus.security", "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"),
                 appDetailsIntent(pkg)
             )
-            OemVendor.VIVO -> listOf(
+            Vendor.VIVO -> listOf(
                 componentIntent("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"),
                 componentIntent("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
                 appDetailsIntent(pkg)
             )
-            OemVendor.HUAWEI_HONOR -> listOf(
+            Vendor.HUAWEI_HONOR -> listOf(
                 componentIntent("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
                 appDetailsIntent(pkg)
             )
-            OemVendor.ASUS -> listOf(
+            Vendor.ASUS -> listOf(
                 componentIntent("com.asus.mobilemanager", "com.asus.mobilemanager.autostart.AutoStartActivity"),
                 appDetailsIntent(pkg)
             )
-            OemVendor.STANDARD -> listOf(appDetailsIntent(pkg))
+            Vendor.GENERIC -> listOf(appDetailsIntent(pkg))
         }
         launchFirstAvailable(context, candidates)
     }

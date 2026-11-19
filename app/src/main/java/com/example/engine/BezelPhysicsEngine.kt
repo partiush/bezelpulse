@@ -17,7 +17,10 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * High-precision critically/under-damped spring physics state for any hardware button (built-in or custom).
+ * Damped harmonic spring state for a single hardware button.
+ *
+ * Pulse hold durations are measured in accumulated rendered frame time rather than wall-clock
+ * deltas so display wake-up VSYNC stalls cannot expire an animation before its first frame draws.
  */
 class ButtonSpringState(val buttonId: String) {
     var displacement: Float = 0f
@@ -29,14 +32,16 @@ class ButtonSpringState(val buttonId: String) {
 
     private var pressStartTimeMs: Long = 0L
     private var releasePending: Boolean = false
-    private var customHoldOverrideMs: Long? = null
+    private var pulseRenderedMs: Float = 0f
+    private var pulseTargetHoldMs: Float = 0f
 
     fun onPress(nowMs: Long = SystemClock.uptimeMillis()) {
         if (!isPhysicallyPressed) {
             isPhysicallyPressed = true
             pressStartTimeMs = nowMs
             releasePending = false
-            customHoldOverrideMs = null
+            pulseRenderedMs = 0f
+            pulseTargetHoldMs = 0f
             if (velocity < 2.2f) {
                 velocity += 2.2f
             }
@@ -45,9 +50,11 @@ class ButtonSpringState(val buttonId: String) {
 
     fun onRelease(nowMs: Long = SystemClock.uptimeMillis(), minHoldMs: Long) {
         isPhysicallyPressed = false
-        val heldMs = nowMs - pressStartTimeMs
+        val heldMs = (nowMs - pressStartTimeMs).coerceAtLeast(0L)
         if (heldMs < minHoldMs) {
             releasePending = true
+            pulseRenderedMs = heldMs.toFloat()
+            pulseTargetHoldMs = minHoldMs.toFloat()
         } else {
             releasePending = false
         }
@@ -57,9 +64,10 @@ class ButtonSpringState(val buttonId: String) {
         isPhysicallyPressed = false
         pressStartTimeMs = nowMs
         releasePending = true
-        customHoldOverrideMs = holdDurationOverrideMs
-        if (velocity < 3.2f) {
-            velocity += 3.2f
+        pulseRenderedMs = 0f
+        pulseTargetHoldMs = (holdDurationOverrideMs ?: 0L).toFloat()
+        if (velocity < 3.4f) {
+            velocity += 3.4f
         }
     }
 
@@ -68,23 +76,27 @@ class ButtonSpringState(val buttonId: String) {
     }
 
     fun step(dtSeconds: Float, config: BezelConfig, nowMs: Long = SystemClock.uptimeMillis()): Boolean {
-        val elapsedMs = nowMs - pressStartTimeMs
-        val effectiveHoldMs = customHoldOverrideMs ?: config.minPressHoldMs
-        if (releasePending && elapsedMs >= effectiveHoldMs) {
-            releasePending = false
-            customHoldOverrideMs = null
+        val clampedDt = dtSeconds.coerceIn(0.0005f, 0.033f)
+
+        if (releasePending) {
+            val requiredHoldMs = if (pulseTargetHoldMs > 0f) pulseTargetHoldMs else config.minPressHoldMs.toFloat()
+            pulseRenderedMs += clampedDt * 1000f
+            if (pulseRenderedMs >= requiredHoldMs) {
+                releasePending = false
+                pulseTargetHoldMs = 0f
+            }
         }
 
         val target = when {
             isPhysicallyPressed -> {
-                val sustainFraction = ((elapsedMs - 140L).coerceAtLeast(0L) / 240f).coerceIn(0f, 1f)
+                val heldMs = (nowMs - pressStartTimeMs).coerceAtLeast(0L)
+                val sustainFraction = ((heldMs - 140L).coerceAtLeast(0L) / 240f).coerceIn(0f, 1f)
                 1.0f + (config.holdBoostMultiplier - 1.0f) * sustainFraction
             }
             releasePending -> 1.0f
             else -> 0.0f
         }
 
-        val clampedDt = dtSeconds.coerceIn(0.0005f, 0.033f)
         val subSteps = 4
         val subDt = clampedDt / subSteps
         val k = config.stiffness.coerceIn(120f, 2000f)
@@ -199,10 +211,6 @@ object SpringAnalyzer {
     }
 }
 
-/**
- * Zero-latency in-process event bus connecting BezelAccessibilityService, BezelKeepAliveService,
- * MainActivity, and live Compose previews for built-in and custom hardware buttons.
- */
 object BezelRuntimeBus {
     fun interface ButtonListener {
         fun onHardwareButton(buttonId: String, isDown: Boolean, isPulseOnly: Boolean, holdOverrideMs: Long?)
@@ -220,7 +228,6 @@ object BezelRuntimeBus {
     private val _lastEvent = MutableStateFlow<ButtonEventRecord?>(null)
     val lastEvent: StateFlow<ButtonEventRecord?> = _lastEvent.asStateFlow()
 
-    // Live hardware key capture hook for the "Add New Button" dialog
     @Volatile
     var onKeyCaptureListener: ((Int) -> Unit)? = null
 
@@ -317,7 +324,7 @@ object BezelRuntimeBus {
                 vibrator.vibrate(if (isPress) 12L else 7L)
             }
         } catch (_: SecurityException) {
-            // Gracefully ignore if device restricts vibration
+            // Device policy restricts vibration
         }
     }
 }

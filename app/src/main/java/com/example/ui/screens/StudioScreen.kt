@@ -305,10 +305,7 @@ private fun AlwaysOnBackgroundCard(
     onOpenAutoStartSettings: () -> Unit
 ) {
     val deviceHint = androidx.compose.runtime.remember {
-        com.example.util.OemSupport.backgroundHintForDevice()
-    }
-    val hasOemAutoStart = androidx.compose.runtime.remember {
-        com.example.util.OemSupport.hasDedicatedAutoStartScreen()
+        com.example.util.OemSupport.universalBackgroundHint()
     }
 
     StudioSectionCard(
@@ -355,7 +352,7 @@ private fun AlwaysOnBackgroundCard(
         )
         PrecisionToggleRow(
             title = "Power Wake & Menu Pulse",
-            subtitle = "Animates the Power bezel on screen wake, lock, and long-press power menus",
+            subtitle = "Animates the Power bezel on screen wake, unlock, lock, and long-press menus",
             checked = config.powerWakePulseEnabled,
             onCheckedChange = onTogglePowerWakePulse,
             testTagName = "power_wake_switch"
@@ -394,7 +391,7 @@ private fun AlwaysOnBackgroundCard(
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
-                    text = if (isBatteryUnrestricted) "Battery OK" else "Unrestrict Battery",
+                    text = if (isBatteryUnrestricted) "Battery OK" else "Battery Settings",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (isBatteryUnrestricted) EmeraldActive else SignalAmber,
                     maxLines = 1
@@ -418,7 +415,7 @@ private fun AlwaysOnBackgroundCard(
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
-                    text = if (hasOemAutoStart) "Auto-Start" else "App Settings",
+                    text = "Auto-Start",
                     style = MaterialTheme.typography.labelMedium,
                     color = TitaniumCyan,
                     maxLines = 1
