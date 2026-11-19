@@ -1,0 +1,141 @@
+name: Build BezelPulse APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Also publish APK as a GitHub Release (direct .apk download without unzipping)'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Release tag name (used only if Create Release is checked, e.g. v1.0.0)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Installable Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Accept Android SDK licenses
+        run: |
+          if [ -n "$ANDROID_HOME" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          fi
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare debug signing keystore
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare Debug APK for download
+        run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/debug/app-debug.apk release-apks/BezelPulse-debug.apk
+          ls -lh release-apks/
+
+      - name: Build Release APK (optional when signing secrets exist)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > my-upload-key.jks
+            gradle :app:assembleRelease --no-daemon --stacktrace
+            cp app/build/outputs/apk/release/app-release.apk release-apks/BezelPulse-release.apk
+            rm -f my-upload-key.jks
+          else
+            echo "Release signing secrets not configured; skipping release APK (debug APK is ready to install)."
+          fi
+
+      - name: Upload BezelPulse APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BezelPulse-APK
+          path: release-apks/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Resolve release tag
+        id: release_meta
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          if [ "$IS_TAG" = "true" ]; then
+            TAG="$REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="v1.0.$RUN_NUM"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true) }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: "BezelPulse ${{ steps.release_meta.outputs.tag }}"
+          body: |
+            ### BezelPulse Android Build
+            Download `BezelPulse-debug.apk` (or `BezelPulse-release.apk` if signing secrets are configured) directly onto your Android device to install.
+          files: release-apks/*.apk
+
+      - name: Write download summary
+        run: |
+          {
+            echo "## BezelPulse APK Ready"
+            echo ""
+            echo "Your installable APK has been built and uploaded as the **BezelPulse-APK** artifact below."
+            echo ""
+            echo "### How to install on Android"
+            echo "1. Scroll down to **Artifacts** on this workflow run and download **BezelPulse-APK**."
+            echo "2. Unzip the downloaded archive and tap \`BezelPulse-debug.apk\` on your Android phone."
+            echo "3. Allow installing unknown apps if prompted, open **BezelPulse**, and enable the Accessibility Service for system-wide animations."
+            echo ""
+            echo "> **Tip:** To get a direct \`.apk\` download link without unzipping, run this workflow manually with **Also publish APK as a GitHub Release** checked, or push a version tag like \`v1.0.0\`."
+          } >> "$GITHUB_STEP_SUMMARY"
